@@ -1,0 +1,55 @@
+name: go-nbd
+
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        toolchain: [oldstable, stable]
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: 0
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/setup-go@v3
+      with:
+        go-version: ${{ matrix.toolchain }}
+    - name: Build
+      run: go build ./...
+  lint:
+    strategy:
+      matrix:
+        toolchain: [oldstable, stable]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/setup-go@v3
+      with:
+        go-version: ${{ matrix.toolchain }}
+    - uses: golangci/golangci-lint-action@v6
+      with:
+        version: v1.59
+  test:
+    strategy:
+      matrix:
+        toolchain: [oldstable, stable]
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/setup-go@v3
+      with:
+        go-version: ${{ matrix.toolchain }}
+    - name: Install nbdkit
+      run: sudo apt-get install nbdkit
+    - name: Test
+      run: go test -timeout 1m -v ./...
