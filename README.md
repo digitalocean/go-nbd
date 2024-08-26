@@ -43,8 +43,8 @@ the base Network Block Device protocol.
 
 ## Security
 
-Please see [SECURITY.md](./SECURITY.md) for information on reporting security-related
-concerns to DigitalOcean's security team.
+Please see [SECURITY.md](https://github.com/digitalocean/go-nbd/security/policy) for
+information on reporting security-related concerns to DigitalOcean's security team.
 
 Thank you!
 
