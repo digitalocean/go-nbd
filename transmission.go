@@ -4,10 +4,12 @@ package nbd
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"time"
 	"unsafe"
 
 	"github.com/digitalocean/go-nbd/internal/nbdproto"
@@ -142,12 +144,28 @@ type stream struct {
 	length  uint32
 }
 
-func (c *Conn) addStream(cookie uint64, length uint32) (replies chan reply, drain func()) {
+func (c *Conn) addStream(ctx context.Context, cookie uint64, length uint32) (replies chan reply, drain func()) {
 	replies = make(chan reply, 1)
 	drain = func() {
 		for range replies {
 		}
 	}
+
+	go func() {
+		<-ctx.Done()
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		s, ok := c.streams[cookie]
+		if !ok {
+			return
+		}
+
+		s.replies <- reply{err: ctx.Err()}
+		close(s.replies)
+		delete(c.streams, cookie)
+	}()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -300,30 +318,46 @@ func (c *Conn) demuxReplies() (err error) {
 	}
 }
 
-func requestTransmit(server io.Writer, cflags uint16, ty uint16, cookie uint64, offset uint64, length uint32, payload []byte) error {
-	header := nbdproto.RequestHeader{
-		Magic:  nbdproto.REQUEST_MAGIC,
-		Flags:  cflags,
-		Type:   ty,
-		Cookie: cookie,
-		Offset: offset,
-		Length: length,
-	}
-	if l := len(payload); l > 0 {
-		header.Length = uint32(l)
-	}
-	psize := int(unsafe.Sizeof(header)) + len(payload)
-	packet := bytes.NewBuffer(make([]byte, 0, psize))
-	if err := binary.Write(packet, binary.BigEndian, header); err != nil {
+func (c *Conn) requestTransmit(ctx context.Context, cflags uint16, ty uint16, cookie uint64, offset uint64, length uint32, payload []byte) error {
+	work := make(chan error, 1)
+	go func() {
+		defer close(work)
+		header := nbdproto.RequestHeader{
+			Magic:  nbdproto.REQUEST_MAGIC,
+			Flags:  cflags,
+			Type:   ty,
+			Cookie: cookie,
+			Offset: offset,
+			Length: length,
+		}
+		if l := len(payload); l > 0 {
+			header.Length = uint32(l)
+		}
+		psize := int(unsafe.Sizeof(header)) + len(payload)
+		packet := bytes.NewBuffer(make([]byte, 0, psize))
+		if err := binary.Write(packet, binary.BigEndian, header); err != nil {
+			work <- err
+			return
+		}
+		if err := binary.Write(packet, binary.BigEndian, payload); err != nil {
+			work <- err
+			return
+		}
+		if _, err := io.Copy(c.conn, packet); err != nil {
+			work <- err
+			return
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = c.conn.SetWriteDeadline(time.Now())
+		<-work
+		_ = c.conn.SetWriteDeadline(time.Time{})
+		return ctx.Err()
+	case err := <-work:
 		return err
 	}
-	if err := binary.Write(packet, binary.BigEndian, payload); err != nil {
-		return err
-	}
-	if _, err := io.Copy(server, packet); err != nil {
-		return err
-	}
-	return nil
 }
 
 func isTXError(type_ uint16) bool {

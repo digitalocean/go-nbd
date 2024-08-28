@@ -66,11 +66,11 @@ At which point, you'll want to complete the NBD handshake before
 negotiating options:
 
 ```go
-err = conn.Connect()
+err = conn.Connect(ctx)
 if err != nil {
     return fmt.Errorf("nbd connect: %w", err)
 }
-defer conn.Abort()
+defer conn.Abort(context.TODO())
 ```
 
 If the call to Connect is successful, your nbd.Conn is now in the
@@ -78,42 +78,42 @@ option negotiation phase. In this phase, you can call the following
 methods on your nbd.Conn:
 
 ```go
-func (c *Conn) Abort() error
+func (c *Conn) Abort(ctx context.Context) error
 func (c *Conn) Close() error
-func (c *Conn) ExportName(name string) (size uint64, flags TransmissionFlags, err error)
-func (c *Conn) Go(name string, requests []InfoRequest) (ExportInfo, error)
-func (c *Conn) Info(name string, requests []InfoRequest) (ExportInfo, error)
-func (c *Conn) List() (exports []string, err error)
-func (c *Conn) ListMetaContext(export string, queries ...string) ([]MetaContext, error)
-func (c *Conn) SetMetaContext(export string, query string, additional ...string) ([]MetaContext, error)
-func (c *Conn) StructuredReplies() error
+func (c *Conn) ExportName(ctx context.Context, name string) (size uint64, flags TransmissionFlags, err error)
+func (c *Conn) Go(ctx context.Context, name string, requests []InfoRequest) (info ExportInfo, err error)
+func (c *Conn) Info(ctx context.Context, name string, requests []InfoRequest) (info ExportInfo, err error)
+func (c *Conn) List(ctx context.Context) (exports []string, err error)
+func (c *Conn) ListMetaContext(ctx context.Context, export string, queries ...string) (metas []MetaContext, err error)
+func (c *Conn) SetMetaContext(ctx context.Context, export string, query string, additional ...string) (metas []MetaContext, err error)
+func (c *Conn) StructuredReplies(ctx context.Context) error
 ```
 
 Note that successful execution of the following methods will transition
 the nbd.Conn into the transmission phase:
 
 ```go
-func (c *Conn) ExportName(name string) (size uint64, flags TransmissionFlags, err error)
-func (c *Conn) Go(name string, requests []InfoRequest) (ExportInfo, error)
+func (c *Conn) ExportName(ctx context.Context, name string) (size uint64, flags TransmissionFlags, err error)
+func (c *Conn) Go(ctx context.Context, name string, requests []InfoRequest) (info ExportInfo, err error)
 ```
 
-<p align=center>:warning: Don't forget to <code>defer conn.Disconnect()</code> after entering the
+<p align=center>:warning: Don't forget to <code>defer conn.Disconnect(ctx)</code> after entering the
 transmission phase! :warning:</p>
 
 Once in the transmission phase, you can call the following methods on the
 nbd.Conn:
 
 ```go
-func (c *Conn) Abort() error
-func (c *Conn) BlockStatus(flags CommandFlags, offset uint64, length uint32) (BlockStatus, error)
-func (c *Conn) Cache(flags CommandFlags, offset uint64, length uint32) error
+func (c *Conn) Abort(ctx context.Context) error
+func (c *Conn) BlockStatus(ctx context.Context, flags CommandFlags, offset uint64, length uint32) (BlockStatus, error)
+func (c *Conn) Cache(ctx context.Context, flags CommandFlags, offset uint64, length uint32) error
 func (c *Conn) Close() error
-func (c *Conn) Disconnect() error
-func (c *Conn) Flush(flags CommandFlags) error
-func (c *Conn) Read(flags CommandFlags, offset uint64, length uint32) ([]Read, error)
-func (c *Conn) Trim(flags CommandFlags, offset uint64, length uint32) error
-func (c *Conn) Write(flags CommandFlags, offset uint64, data []byte) error
-func (c *Conn) WriteZeroes(flags CommandFlags, offset uint64, length uint32) error
+func (c *Conn) Disconnect(ctx context.Context) error
+func (c *Conn) Flush(ctx context.Context, flags CommandFlags) error
+func (c *Conn) Read(ctx context.Context, flags CommandFlags, offset uint64, length uint32) ([]Read, error)
+func (c *Conn) Trim(ctx context.Context, flags CommandFlags, offset uint64, length uint32) error
+func (c *Conn) Write(ctx context.Context, flags CommandFlags, offset uint64, data []byte) error
+func (c *Conn) WriteZeroes(ctx context.Context, flags CommandFlags, offset uint64, length uint32) error
 ```
 
 ## FAQ
@@ -159,14 +159,14 @@ defer conn.Close()
 // the option phase, so conn.Abort will politely terminate
 // this phase with the server (or no-op if the Conn has
 // transitioned into the transmission phase.)
-_ = conn.Connect()
-defer conn.Abort()
+_ = conn.Connect(ctx)
+defer conn.Abort(context.TODO())
 
 // conn.Go or conn.ExportName transition the Conn into the
 // transmission phase, so conn.Disconnect will politely
 // terminate this phase with the server.
 _, _ = conn.Go("vda", nbd.InfoRequestAll())
-defer conn.Disconnect()
+defer conn.Disconnect(context.TODO())
 ```
 
 [^1]: https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md

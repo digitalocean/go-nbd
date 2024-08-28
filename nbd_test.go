@@ -109,18 +109,18 @@ func TestNBD(t *testing.T) {
 				}
 			}()
 
-			err = conn.Connect()
+			err = conn.Connect(ctx)
 			if err != nil {
 				t.Fatalf("connect: %v", err)
 			}
 			defer func() {
 				t.Helper()
-				if err := conn.Abort(); err != nil {
+				if err := conn.Abort(ctx); err != nil {
 					t.Errorf("abort: %v", err)
 				}
 			}()
 
-			exports, err := conn.List()
+			exports, err := conn.List(ctx)
 			if err != nil {
 				t.Errorf("list: %v", err)
 			}
@@ -131,12 +131,12 @@ func TestNBD(t *testing.T) {
 
 			export := exports[0]
 
-			err = conn.StructuredReplies()
+			err = conn.StructuredReplies(ctx)
 			if err != nil {
 				t.Fatalf("set structured replies: %v", err)
 			}
 
-			metacontexts, err := conn.ListMetaContext(export)
+			metacontexts, err := conn.ListMetaContext(ctx, export)
 			if err != nil {
 				t.Fatalf("list meta contexts: %v", err)
 			}
@@ -148,7 +148,7 @@ func TestNBD(t *testing.T) {
 				t.Fatal("did not find base:allocation meta context")
 			}
 
-			setcontexts, err := conn.SetMetaContext(export, metacontexts[index].Name)
+			setcontexts, err := conn.SetMetaContext(ctx, export, metacontexts[index].Name)
 			if err != nil {
 				t.Fatalf("set base:allocation as meta context: %v", err)
 			}
@@ -157,7 +157,7 @@ func TestNBD(t *testing.T) {
 				t.Fatal(cmp.Diff(metacontexts, setcontexts))
 			}
 
-			info, err := conn.Info(export, InfoRequestAll())
+			info, err := conn.Info(ctx, export, InfoRequestAll())
 			if err != nil {
 				t.Fatalf("info: %v", err)
 			}
@@ -166,12 +166,12 @@ func TestNBD(t *testing.T) {
 				t.Errorf("want size=8M, got size=%dM", (info.Size/1024)/1024)
 			}
 
-			info2, err := conn.Go(export, InfoRequestAll())
+			info2, err := conn.Go(ctx, export, InfoRequestAll())
 			if err != nil {
 				t.Fatalf("go: %v", err)
 			}
 			defer func() {
-				if err := conn.Disconnect(); err != nil {
+				if err := conn.Disconnect(ctx); err != nil {
 					t.Fatalf("disconnect: %v", err)
 				}
 			}()
@@ -184,22 +184,22 @@ func TestNBD(t *testing.T) {
 			for i := 0; i < len(data); i++ {
 				data[i] = 0xce
 			}
-			err = conn.Write(CommandFlags(0), 0, data)
+			err = conn.Write(ctx, CommandFlags(0), 0, data)
 			if err != nil {
 				t.Errorf("write 512 0xce to offset 0: %v", err)
 			}
 
-			err = conn.Flush(CommandFlags(0))
+			err = conn.Flush(ctx, CommandFlags(0))
 			if err != nil {
 				t.Errorf("flush: %v", err)
 			}
 
-			err = conn.Cache(CommandFlags(0), 512, 512)
+			err = conn.Cache(ctx, CommandFlags(0), 512, 512)
 			if err != nil {
 				t.Errorf("cache 512, 1024: %v", err)
 			}
 
-			readData, err := conn.Read(CommandFlags(0), 0, 512)
+			readData, err := conn.Read(ctx, CommandFlags(0), 0, 512)
 			if err != nil {
 				t.Errorf("read first 512: %v", err)
 			}
@@ -213,7 +213,7 @@ func TestNBD(t *testing.T) {
 				t.Error(t, cmp.Diff(data, got))
 			}
 
-			status, err := conn.BlockStatus(CommandFlags(0), 0, 1024)
+			status, err := conn.BlockStatus(ctx, CommandFlags(0), 0, 1024)
 			if err != nil {
 				t.Errorf("block status: %v", err)
 			}
@@ -227,12 +227,12 @@ func TestNBD(t *testing.T) {
 				t.Errorf("first 512 bytes are not allocated, but should be %x", alloc)
 			}
 
-			err = conn.WriteZeroes(CommandFlags(0), 0, 512)
+			err = conn.WriteZeroes(ctx, CommandFlags(0), 0, 512)
 			if err != nil {
 				t.Errorf("overwrite first 512 with zeroes: %v", err)
 			}
 
-			readData, err = conn.Read(CommandFlags(0), 0, 512)
+			readData, err = conn.Read(ctx, CommandFlags(0), 0, 512)
 			if err != nil {
 				t.Errorf("read first 512: %v", err)
 			}
@@ -247,7 +247,7 @@ func TestNBD(t *testing.T) {
 				t.Error(cmp.Diff(zeroes, got))
 			}
 
-			err = conn.Trim(CommandFlags(0), 0, 512)
+			err = conn.Trim(ctx, CommandFlags(0), 0, 512)
 			if err != nil {
 				t.Errorf("trim first 512: %v", err)
 			}

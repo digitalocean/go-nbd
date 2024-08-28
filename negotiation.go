@@ -4,9 +4,11 @@ package nbd
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 	"unsafe"
 
 	"github.com/digitalocean/go-nbd/internal/nbdproto"
@@ -358,6 +360,24 @@ func readOptionReply(server io.Reader) (optionReply, error) {
 		Type:    header.Type,
 		Payload: buf,
 	}, nil
+}
+
+func (c *Conn) optionCtx(ctx context.Context, f func() error) error {
+	work := make(chan error, 1)
+	go func() {
+		defer close(work)
+		work <- f()
+	}()
+
+	select {
+	case err := <-work:
+		return err
+	case <-ctx.Done():
+		_ = c.conn.SetDeadline(time.Now())
+		<-work
+		_ = c.conn.SetDeadline(time.Time{})
+		return ctx.Err()
+	}
 }
 
 func isOptError(id uint32) bool {

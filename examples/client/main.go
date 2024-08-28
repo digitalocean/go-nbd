@@ -18,6 +18,8 @@ func main() {
 }
 
 func run() error {
+	ctx := context.TODO()
+
 	uri := nbd.MustURI(os.Getenv("EXAMPLE_NBD_URI"))
 
 	var dialer nbd.Dialer
@@ -26,12 +28,12 @@ func run() error {
 		return fmt.Errorf("nbd dial: %w", err)
 	}
 	defer conn.Close()
-	err = conn.Connect()
+	err = conn.Connect(ctx)
 	if err != nil {
 		return fmt.Errorf("nbd connect: %w", err)
 	}
-	defer conn.Abort()
-	exports, err := conn.List()
+	defer conn.Abort(ctx)
+	exports, err := conn.List(ctx)
 	if err != nil {
 		return fmt.Errorf("nbd list: %w", err)
 	}
@@ -39,12 +41,12 @@ func run() error {
 		return fmt.Errorf("nbd: no exports")
 	}
 	name := exports[0]
-	info, err := conn.Info(name, nbd.InfoRequestAll())
+	info, err := conn.Info(ctx, name, nbd.InfoRequestAll())
 	if err != nil {
 		return fmt.Errorf("nbd: info: %w", err)
 	}
 	fmt.Printf("info %+v\n", info)
-	metas, err := conn.ListMetaContext(name)
+	metas, err := conn.ListMetaContext(ctx, name)
 	if err != nil {
 		return fmt.Errorf("nbd: list meta context: %w", err)
 	}
@@ -52,23 +54,23 @@ func run() error {
 	if len(metas) == 0 {
 		return nil
 	}
-	err = conn.StructuredReplies()
+	err = conn.StructuredReplies(ctx)
 	if err != nil {
 		return fmt.Errorf("nbd: set structured replies: %w", err)
 	}
-	_, err = conn.SetMetaContext(name, metas[0].Name)
+	_, err = conn.SetMetaContext(ctx, name, metas[0].Name)
 	if err != nil {
 		return fmt.Errorf("nbd: set meta context: %w", err)
 	}
-	size, _, err := conn.ExportName(name)
+	size, _, err := conn.ExportName(ctx, name)
 	if err != nil {
 		return fmt.Errorf("nbd: export name: %w", err)
 	}
-	defer conn.Disconnect()
+	defer conn.Disconnect(ctx)
 
 	// Note, you'll want to do something smarter for the length
 	// field if your export is larger than math.MaxUint32.
-	status, err := conn.BlockStatus(0, 0, uint32(size))
+	status, err := conn.BlockStatus(ctx, 0, 0, uint32(size))
 	if err != nil {
 		return fmt.Errorf("nbd: block status: %w", err)
 	}
@@ -79,11 +81,11 @@ func run() error {
 		fmt.Printf("%10d: %d bytes %v\n", offset, d.Length, a)
 		offset += d.Length
 	}
-	err = conn.Cache(0, 0, 512)
+	err = conn.Cache(ctx, 0, 0, 512)
 	if err != nil {
 		return fmt.Errorf("nbd: cache: %w", err)
 	}
-	_, err = conn.Read(0, 0, 512)
+	_, err = conn.Read(ctx, 0, 0, 512)
 	if err != nil {
 		return fmt.Errorf("nbd: read: %w", err)
 	}

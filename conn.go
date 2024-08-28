@@ -135,7 +135,24 @@ type Conn struct {
 	wg      *errgroup.Group
 }
 
-func (c *Conn) Connect() (err error) {
+func (c *Conn) Connect(ctx context.Context) (err error) {
+	work := make(chan error)
+	go func() {
+		defer close(work)
+		work <- c.connect()
+	}()
+	select {
+	case <-ctx.Done():
+		_ = c.conn.SetDeadline(time.Now())
+		<-work
+		_ = c.conn.SetDeadline(time.Time{})
+		return ctx.Err()
+	case err := <-work:
+		return err
+	}
+}
+
+func (c *Conn) connect() (err error) {
 	if state := c.state(); state != connectionStateNew {
 		return errors.New("duplicate call to connect")
 	}
@@ -191,7 +208,16 @@ func (c *Conn) Connect() (err error) {
 	return nil
 }
 
-func (c *Conn) ExportName(name string) (size uint64, flags TransmissionFlags, err error) {
+func (c *Conn) ExportName(ctx context.Context, name string) (size uint64, flags TransmissionFlags, err error) {
+	work := func() error {
+		size, flags, err = c.exportName(name)
+		return err
+	}
+	err = c.optionCtx(ctx, work)
+	return size, flags, err
+}
+
+func (c *Conn) exportName(name string) (size uint64, flags TransmissionFlags, err error) {
 	if state := c.state(); state != connectionStateOptions {
 		return 0, 0, errNotOption
 	}
@@ -219,7 +245,14 @@ func (c *Conn) ExportName(name string) (size uint64, flags TransmissionFlags, er
 	return reply.ExportSize, reply.TransmissionFlags, nil
 }
 
-func (c *Conn) Abort() error {
+func (c *Conn) Abort(ctx context.Context) error {
+	work := func() error {
+		return c.abort()
+	}
+	return c.optionCtx(ctx, work)
+}
+
+func (c *Conn) abort() error {
 	if c.inTransmission.Load() {
 		return nil
 	}
@@ -230,7 +263,16 @@ func (c *Conn) Abort() error {
 	return nil
 }
 
-func (c *Conn) List() (exports []string, err error) {
+func (c *Conn) List(ctx context.Context) (exports []string, err error) {
+	work := func() error {
+		exports, err = c.list()
+		return err
+	}
+	err = c.optionCtx(ctx, work)
+	return exports, err
+}
+
+func (c *Conn) list() (exports []string, err error) {
 	if state := c.state(); state != connectionStateOptions {
 		return nil, errNotOption
 	}
@@ -258,7 +300,16 @@ func (c *Conn) List() (exports []string, err error) {
 	return exports, nil
 }
 
-func (c *Conn) Info(name string, requests []InfoRequest) (ExportInfo, error) {
+func (c *Conn) Info(ctx context.Context, name string, requests []InfoRequest) (info ExportInfo, err error) {
+	work := func() error {
+		info, err = c.info(name, requests)
+		return err
+	}
+	err = c.optionCtx(ctx, work)
+	return info, err
+}
+
+func (c *Conn) info(name string, requests []InfoRequest) (ExportInfo, error) {
 	if state := c.state(); state != connectionStateOptions {
 		return ExportInfo{}, errNotOption
 	}
@@ -270,7 +321,16 @@ func (c *Conn) Info(name string, requests []InfoRequest) (ExportInfo, error) {
 	})
 }
 
-func (c *Conn) Go(name string, requests []InfoRequest) (ExportInfo, error) {
+func (c *Conn) Go(ctx context.Context, name string, requests []InfoRequest) (info ExportInfo, err error) {
+	work := func() error {
+		info, err = c.go_(name, requests)
+		return err
+	}
+	err = c.optionCtx(ctx, work)
+	return info, err
+}
+
+func (c *Conn) go_(name string, requests []InfoRequest) (ExportInfo, error) {
 	if state := c.state(); state != connectionStateOptions {
 		return ExportInfo{}, errNotOption
 	}
@@ -349,7 +409,14 @@ func infoGo[R interface {
 	return info, nil
 }
 
-func (c *Conn) StructuredReplies() error {
+func (c *Conn) StructuredReplies(ctx context.Context) error {
+	work := func() error {
+		return c.structuredReplies()
+	}
+	return c.optionCtx(ctx, work)
+}
+
+func (c *Conn) structuredReplies() error {
 	if state := c.state(); state != connectionStateOptions {
 		return errNotOption
 	}
@@ -370,7 +437,16 @@ func (c *Conn) StructuredReplies() error {
 	return nil
 }
 
-func (c *Conn) ListMetaContext(export string, queries ...string) ([]MetaContext, error) {
+func (c *Conn) ListMetaContext(ctx context.Context, export string, queries ...string) (metas []MetaContext, err error) {
+	work := func() error {
+		metas, err = c.listMetaContext(export, queries...)
+		return err
+	}
+	err = c.optionCtx(ctx, work)
+	return metas, err
+}
+
+func (c *Conn) listMetaContext(export string, queries ...string) ([]MetaContext, error) {
 	if state := c.state(); state != connectionStateOptions {
 		return nil, errNotOption
 	}
@@ -403,7 +479,16 @@ func (c *Conn) ListMetaContext(export string, queries ...string) ([]MetaContext,
 	return exports, nil
 }
 
-func (c *Conn) SetMetaContext(export string, query string, additional ...string) ([]MetaContext, error) {
+func (c *Conn) SetMetaContext(ctx context.Context, export string, query string, additional ...string) (metas []MetaContext, err error) {
+	work := func() error {
+		metas, err = c.setMetaContext(export, query, additional...)
+		return err
+	}
+	err = c.optionCtx(ctx, work)
+	return metas, err
+}
+
+func (c *Conn) setMetaContext(export string, query string, additional ...string) ([]MetaContext, error) {
 	if state := c.state(); state != connectionStateOptions {
 		return nil, errNotOption
 	}
@@ -436,16 +521,19 @@ func (c *Conn) SetMetaContext(export string, query string, additional ...string)
 	return exports, nil
 }
 
-func (c *Conn) Read(flags CommandFlags, offset uint64, length uint32) ([]Read, error) {
+func (c *Conn) Read(ctx context.Context, flags CommandFlags, offset uint64, length uint32) ([]Read, error) {
 	if state := c.state(); state != connectionStateTransmission {
 		return nil, errNotTransmission
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, length)
+	stream, drain := c.addStream(ctx, cookie, length)
 	defer drain()
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_READ, cookie, offset, length, nil)
+	err := c.requestTransmit(ctx, uint16(flags), nbdproto.CMD_READ, cookie, offset, length, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -481,7 +569,7 @@ func (c *Conn) Read(flags CommandFlags, offset uint64, length uint32) ([]Read, e
 	return reads, nil
 }
 
-func (c *Conn) Write(flags CommandFlags, offset uint64, data []byte) error {
+func (c *Conn) Write(ctx context.Context, flags CommandFlags, offset uint64, data []byte) error {
 	if state := c.state(); state != connectionStateTransmission {
 		return errNotTransmission
 	}
@@ -490,13 +578,16 @@ func (c *Conn) Write(flags CommandFlags, offset uint64, data []byte) error {
 		return errors.New("payload size exceeds protocol limit")
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
+	stream, drain := c.addStream(ctx, cookie, 0)
 	defer drain()
 
 	length := uint32(len(data))
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_WRITE, cookie, offset, length, data)
+	err := c.requestTransmit(ctx, uint16(flags), nbdproto.CMD_WRITE, cookie, offset, length, data)
 	if err != nil {
 		return err
 	}
@@ -510,16 +601,19 @@ func (c *Conn) Write(flags CommandFlags, offset uint64, data []byte) error {
 	return nil
 }
 
-func (c *Conn) Flush(flags CommandFlags) error {
+func (c *Conn) Flush(ctx context.Context, flags CommandFlags) error {
 	if state := c.state(); state != connectionStateTransmission {
 		return errNotTransmission
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
+	stream, drain := c.addStream(ctx, cookie, 0)
 	defer drain()
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_FLUSH, cookie, 0, 0, nil)
+	err := c.requestTransmit(ctx, uint16(flags), nbdproto.CMD_FLUSH, cookie, 0, 0, nil)
 	if err != nil {
 		return err
 	}
@@ -533,16 +627,19 @@ func (c *Conn) Flush(flags CommandFlags) error {
 	return nil
 }
 
-func (c *Conn) Trim(flags CommandFlags, offset uint64, length uint32) error {
+func (c *Conn) Trim(ctx context.Context, flags CommandFlags, offset uint64, length uint32) error {
 	if state := c.state(); state != connectionStateTransmission {
 		return errNotTransmission
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
+	stream, drain := c.addStream(ctx, cookie, 0)
 	defer drain()
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_TRIM, cookie, offset, length, nil)
+	err := c.requestTransmit(ctx, uint16(flags), nbdproto.CMD_TRIM, cookie, offset, length, nil)
 	if err != nil {
 		return err
 	}
@@ -556,16 +653,19 @@ func (c *Conn) Trim(flags CommandFlags, offset uint64, length uint32) error {
 	return nil
 }
 
-func (c *Conn) Cache(flags CommandFlags, offset uint64, length uint32) error {
+func (c *Conn) Cache(ctx context.Context, flags CommandFlags, offset uint64, length uint32) error {
 	if state := c.state(); state != connectionStateTransmission {
 		return errNotTransmission
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
+	stream, drain := c.addStream(ctx, cookie, 0)
 	defer drain()
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_CACHE, cookie, offset, length, nil)
+	err := c.requestTransmit(ctx, uint16(flags), nbdproto.CMD_CACHE, cookie, offset, length, nil)
 	if err != nil {
 		return err
 	}
@@ -579,16 +679,19 @@ func (c *Conn) Cache(flags CommandFlags, offset uint64, length uint32) error {
 	return nil
 }
 
-func (c *Conn) WriteZeroes(flags CommandFlags, offset uint64, length uint32) error {
+func (c *Conn) WriteZeroes(ctx context.Context, flags CommandFlags, offset uint64, length uint32) error {
 	if state := c.state(); state != connectionStateTransmission {
 		return errNotTransmission
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
+	stream, drain := c.addStream(ctx, cookie, 0)
 	defer drain()
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_WRITE_ZEROES, cookie, offset, length, nil)
+	err := c.requestTransmit(ctx, uint16(flags), nbdproto.CMD_WRITE_ZEROES, cookie, offset, length, nil)
 	if err != nil {
 		return err
 	}
@@ -602,16 +705,19 @@ func (c *Conn) WriteZeroes(flags CommandFlags, offset uint64, length uint32) err
 	return nil
 }
 
-func (c *Conn) BlockStatus(flags CommandFlags, offset uint64, length uint32) (BlockStatus, error) {
+func (c *Conn) BlockStatus(ctx context.Context, flags CommandFlags, offset uint64, length uint32) (BlockStatus, error) {
 	if state := c.state(); state != connectionStateTransmission {
 		return BlockStatus{}, errNotTransmission
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
+	stream, drain := c.addStream(ctx, cookie, 0)
 	defer drain()
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_BLOCK_STATUS, cookie, offset, length, nil)
+	err := c.requestTransmit(ctx, uint16(flags), nbdproto.CMD_BLOCK_STATUS, cookie, offset, length, nil)
 	if err != nil {
 		return BlockStatus{}, err
 	}
@@ -681,7 +787,7 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
 
-func (c *Conn) Disconnect() error {
+func (c *Conn) Disconnect(ctx context.Context) error {
 	if state := c.state(); state == connectionStateError {
 		return nil
 	}
@@ -690,7 +796,7 @@ func (c *Conn) Disconnect() error {
 	}
 
 	cookie := c.cookie.Add(1)
-	err := requestTransmit(c.conn, 0, nbdproto.CMD_DISC, cookie, 0, 0, nil)
+	err := c.requestTransmit(ctx, 0, nbdproto.CMD_DISC, cookie, 0, 0, nil)
 	if err != nil {
 		return err
 	}
