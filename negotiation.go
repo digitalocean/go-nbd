@@ -366,28 +366,11 @@ func isOptError(id uint32) bool {
 
 func toOptError(id uint32, payload []byte) error {
 	message := string(payload)
-	switch id {
-	case nbdproto.REP_ERR_UNSUPPORTED:
-		return &NegotiationError{ErrUnsupported, message}
-	case nbdproto.REP_ERR_POLICY:
-		return &NegotiationError{ErrPolicy, message}
-	case nbdproto.REP_ERR_INVALID:
-		return &NegotiationError{ErrInvalid, message}
-	case nbdproto.REP_ERR_PLATFORM:
-		return &NegotiationError{ErrPlatform, message}
-	case nbdproto.REP_ERR_TLS_REQUIRED:
-		return &NegotiationError{ErrTLSReqd, message}
-	case nbdproto.REP_ERR_UNKNOWN:
-		return &NegotiationError{ErrUnknown, message}
-	case nbdproto.REP_ERR_SHUTDOWN:
-		return &NegotiationError{ErrShutdown, message}
-	case nbdproto.REP_ERR_BLOCK_SIZE_REQUIRED:
-		return &NegotiationError{ErrBlockSizeRequired, message}
-	case nbdproto.REP_ERR_TOO_BIG:
-		return &NegotiationError{ErrTooBig, message}
-	case nbdproto.REP_ERR_EXT_HEADER_REQUIRED:
-		return &NegotiationError{ErrExtHeaderRequired, message}
-	default:
-		return &NegotiationError{ErrUndefined, fmt.Sprintf("id %x", id)}
+	return &NegotiationError{
+		Code: OptionErrorCode(id),
+		Message: NullErrorMessage{
+			Value: message,
+			Valid: len(message) > 0,
+		},
 	}
 }

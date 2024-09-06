@@ -220,10 +220,14 @@ func (c *Conn) demuxReplies() (err error) {
 				if !ok {
 					return
 				}
+				var err error
+				if hdr.Error != 0 {
+					err = &TransmissionError{Code: TransmissionErrorCode(hdr.Error)}
+				}
 				r := reply{
 					simple: &hdr,
 					buf:    buf,
-					err:    codeToErr(hdr.Error),
+					err:    err,
 				}
 				stream.replies <- r
 				close(stream.replies)
@@ -268,11 +272,17 @@ func (c *Conn) demuxReplies() (err error) {
 					return fmt.Errorf("route replies: structured: read offset: %w", err)
 				}
 			}
+			m := b.String()
 			replyError = &TransmissionError{
-				Cause:     codeToErr(code),
-				Message:   b.String(),
-				HasOffset: hdr.Type == nbdproto.REPLY_TYPE_ERROR_OFFSET,
-				Offset:    offset,
+				Code: TransmissionErrorCode(code),
+				Message: NullErrorMessage{
+					Value: m,
+					Valid: len(m) > 0,
+				},
+				Offset: NullOffset{
+					Value: offset,
+					Valid: hdr.Type == nbdproto.REPLY_TYPE_ERROR_OFFSET,
+				},
 			}
 		}
 		func() {
@@ -328,29 +338,4 @@ func requestTransmit(server io.Writer, cflags uint16, ty uint16, cookie uint64, 
 
 func isTXError(type_ uint16) bool {
 	return type_&(1<<15) != 0
-}
-
-func codeToErr(id uint32) error {
-	var cause error
-	switch id {
-	case nbdproto.EPERM:
-		cause = ErrPerm
-	case nbdproto.EIO:
-		cause = ErrIO
-	case nbdproto.ENOMEM:
-		cause = ErrNoMem
-	case nbdproto.ENOSPC:
-		cause = ErrNoSpc
-	case nbdproto.EOVERFLOW:
-		cause = ErrOverflow
-	case nbdproto.ENOTSUP:
-		cause = ErrNotSupported
-	case nbdproto.ESHUTDOWN:
-		cause = ErrTransportShutdown
-	case 0:
-		return nil
-	default:
-		cause = fmt.Errorf("unrecognized error code %d", id)
-	}
-	return cause
 }
