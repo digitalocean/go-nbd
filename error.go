@@ -3,102 +3,124 @@
 package nbd
 
 import (
-	"errors"
 	"fmt"
+
+	"github.com/digitalocean/go-nbd/internal/nbdproto"
 )
 
-var (
-	ErrUnsupported       = errors.New("server does not support option")
-	ErrPolicy            = errors.New("server forbids option")
-	ErrInvalid           = errors.New("invalid option")
-	ErrPlatform          = errors.New("server platform does not support option")
-	ErrTLSReqd           = errors.New("server requires TLS for option")
-	ErrUnknown           = errors.New("requested export is not available")
-	ErrShutdown          = errors.New("server is shutting down")
-	ErrBlockSizeRequired = errors.New("server requires blocksize assurances from client")
-	ErrTooBig            = errors.New("request or reply is too large to process")
-	ErrExtHeaderRequired = errors.New("extension header required")
-	ErrUndefined         = errors.New("did not understand error type from server")
+type OptionErrorCode uint32
 
-	ErrPerm              = errors.New("operation not permitted")
-	ErrIO                = errors.New("input/output error")
-	ErrNoMem             = errors.New("cannot allocate memory")
-	ErrInval             = errors.New("invalid argument")
-	ErrNoSpc             = errors.New("no space left on device")
-	ErrOverflow          = errors.New("value too large for defined data type")
-	ErrNotSupported      = errors.New("operation not supported")
-	ErrTransportShutdown = errors.New("cannot send after transport endpoint shutdown")
+const (
+	ErrUnsupported       = OptionErrorCode(nbdproto.REP_ERR_UNSUPPORTED)
+	ErrPolicy            = OptionErrorCode(nbdproto.REP_ERR_POLICY)
+	ErrInvalid           = OptionErrorCode(nbdproto.REP_ERR_INVALID)
+	ErrPlatform          = OptionErrorCode(nbdproto.REP_ERR_PLATFORM)
+	ErrTLSRequired       = OptionErrorCode(nbdproto.REP_ERR_TLS_REQUIRED)
+	ErrUnknown           = OptionErrorCode(nbdproto.REP_ERR_UNKNOWN)
+	ErrShutdown          = OptionErrorCode(nbdproto.REP_ERR_SHUTDOWN)
+	ErrBlockSizeRequired = OptionErrorCode(nbdproto.REP_ERR_BLOCK_SIZE_REQUIRED)
+	ErrTooBig            = OptionErrorCode(nbdproto.REP_ERR_TOO_BIG)
+	ErrExtHeaderRequired = OptionErrorCode(nbdproto.REP_ERR_EXT_HEADER_REQUIRED)
 )
 
+func (o OptionErrorCode) Symbol() string {
+	switch o {
+	case ErrUnsupported:
+		return "REP_ERR_UNSUPPORTED"
+	case ErrPolicy:
+		return "REP_ERR_POLICY"
+	case ErrInvalid:
+		return "REP_ERR_INVALID"
+	case ErrPlatform:
+		return "REP_ERR_PLATFORM"
+	case ErrTLSRequired:
+		return "REP_ERR_TLS_REQUIRED"
+	case ErrUnknown:
+		return "REP_ERR_UNKNOWN"
+	case ErrShutdown:
+		return "REP_ERR_SHUTDOWN"
+	case ErrBlockSizeRequired:
+		return "REP_ERR_BLOCK_SIZE_REQUIRED"
+	case ErrTooBig:
+		return "REP_ERR_TOO_BIG"
+	case ErrExtHeaderRequired:
+		return "REP_ERR_EXT_HEADER_REQUIRED"
+	default:
+		return fmt.Sprintf("BUG:%d", uint32(o))
+	}
+}
+
+// NegotiationError is a protocol-level error returned by the server
+// during the option phase.
 type NegotiationError struct {
-	Cause   error
-	Message string
+	Code    OptionErrorCode
+	Message NullErrorMessage
 }
 
 func (e *NegotiationError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("%s: %s", e.Cause.Error(), e.Message)
+	if e.Message.Valid {
+		return fmt.Sprintf("%s: %s", e.Message.Value, e.Code.Symbol())
 	}
-	return e.Cause.Error()
+	return e.Code.Symbol()
 }
 
-func IsUnsupportedErr(err error) bool       { return isNegotiationErr(err, ErrUnsupported) }
-func IsPolicyErr(err error) bool            { return isNegotiationErr(err, ErrPolicy) }
-func IsInvalidErr(err error) bool           { return isNegotiationErr(err, ErrInvalid) }
-func IsPlatformErr(err error) bool          { return isNegotiationErr(err, ErrPlatform) }
-func IsTLSReqdErr(err error) bool           { return isNegotiationErr(err, ErrTLSReqd) }
-func IsUnknownErr(err error) bool           { return isNegotiationErr(err, ErrUnknown) }
-func IsShutdownErr(err error) bool          { return isNegotiationErr(err, ErrShutdown) }
-func IsBlockSizeRequiredErr(err error) bool { return isNegotiationErr(err, ErrBlockSizeRequired) }
-func IsErrTooBig(err error) bool            { return isNegotiationErr(err, ErrTooBig) }
-func IsExtHeaderRequiredErr(err error) bool { return isNegotiationErr(err, ErrExtHeaderRequired) }
-func IsUndefinedErr(err error) bool         { return isNegotiationErr(err, ErrUndefined) }
+type TransmissionErrorCode uint32
 
-func isNegotiationErr(err, target error) bool {
-	if errors.Is(err, target) {
-		return true
+const (
+	ErrNotPermitted    = TransmissionErrorCode(nbdproto.EPERM)
+	ErrIO              = TransmissionErrorCode(nbdproto.EIO)
+	ErrNoMemory        = TransmissionErrorCode(nbdproto.ENOMEM)
+	ErrInvalidArgument = TransmissionErrorCode(nbdproto.EINVAL)
+	ErrNoSpaceLeft     = TransmissionErrorCode(nbdproto.ENOSPC)
+	ErrOverflow        = TransmissionErrorCode(nbdproto.EOVERFLOW)
+	ErrNotSupported    = TransmissionErrorCode(nbdproto.ENOTSUP)
+	ErrShuttingDown    = TransmissionErrorCode(nbdproto.ESHUTDOWN)
+)
+
+func (t TransmissionErrorCode) Symbol() string {
+	switch t {
+	case ErrNotPermitted:
+		return "EPERM"
+	case ErrIO:
+		return "EIO"
+	case ErrNoMemory:
+		return "ENOMEM"
+	case ErrInvalidArgument:
+		return "EINVAL"
+	case ErrNoSpaceLeft:
+		return "ENOSPC"
+	case ErrOverflow:
+		return "EOVERFLOW"
+	case ErrNotSupported:
+		return "ENOTSUP"
+	case ErrShuttingDown:
+		return "ESHUTDOWN"
+	default:
+		return fmt.Sprintf("BUG:%d", uint32(t))
 	}
-	var e *NegotiationError
-	if errors.As(err, &e) {
-		return errors.Is(e.Cause, target)
-	}
-	return false
 }
 
+// TransmissionError is a protocol-level error returned by the server
+// during the transmission phase.
 type TransmissionError struct {
-	Cause     error
-	Message   string
-	Offset    uint64
-	HasOffset bool
+	Code    TransmissionErrorCode
+	Message NullErrorMessage
+	Offset  NullOffset
 }
 
 func (e *TransmissionError) Error() string {
-	s := "transmission error"
-	if e.HasOffset {
-		s = fmt.Sprintf("%s at offset %d: %s", s, e.Offset, e.Cause.Error())
+	if e.Message.Valid {
+		return fmt.Sprintf("%s: %s", e.Message.Value, e.Code.Symbol())
 	}
-	if e.Message != "" {
-		s = s + fmt.Sprintf(": %s", e.Message)
-	}
-	return s
+	return e.Code.Symbol()
 }
 
-func IsPermErr(err error) bool              { return isTransmissionErr(err, ErrPerm) }
-func IsIOErr(err error) bool                { return isTransmissionErr(err, ErrIO) }
-func IsNoMemErr(err error) bool             { return isTransmissionErr(err, ErrNoMem) }
-func IsInvalErr(err error) bool             { return isTransmissionErr(err, ErrInval) }
-func IsNoSpcErr(err error) bool             { return isTransmissionErr(err, ErrNoSpc) }
-func IsOverflowErr(err error) bool          { return isTransmissionErr(err, ErrOverflow) }
-func IsNotSupportedErr(err error) bool      { return isTransmissionErr(err, ErrNotSupported) }
-func IsTransportShutdownErr(err error) bool { return isTransmissionErr(err, ErrTransportShutdown) }
+type NullErrorMessage struct {
+	Value string
+	Valid bool
+}
 
-func isTransmissionErr(err, target error) bool {
-	if errors.Is(err, target) {
-		return true
-	}
-	var e *TransmissionError
-	if errors.As(err, &e) {
-		return errors.Is(e.Cause, target)
-	}
-	return false
+type NullOffset struct {
+	Value uint64
+	Valid bool
 }
