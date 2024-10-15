@@ -19,7 +19,7 @@ jobs:
       CGO_ENABLED: 0
     steps:
     - uses: actions/checkout@v2
-    - uses: actions/setup-go@v3
+    - uses: actions/setup-go@v5
       with:
         go-version: ${{ matrix.toolchain }}
     - name: Build
@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - uses: actions/setup-go@v3
+    - uses: actions/setup-go@v5
       with:
         go-version: ${{ matrix.toolchain }}
     - uses: golangci/golangci-lint-action@v6
@@ -46,7 +46,7 @@ jobs:
       CGO_ENABLED: 0
     steps:
     - uses: actions/checkout@v2
-    - uses: actions/setup-go@v3
+    - uses: actions/setup-go@v5
       with:
         go-version: ${{ matrix.toolchain }}
     - name: Install nbdkit
