@@ -5,89 +5,48 @@ package nbd
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/digitalocean/go-nbd/nbdmeta"
 )
 
-var nbdkit = func(defaultValue string) string {
-	if v := os.Getenv("NBDKIT"); v != "" {
-		return v
-	}
-	return defaultValue
-}("nbdkit")
-
-var defaultArgs = []string{
-	"--exit-with-parent",
-}
-
 func TestNBD(t *testing.T) {
-	providers := []struct {
+	tests := []struct {
 		name     string
-		provider func(t *testing.T, ctx context.Context, bin string) (uri string, cleanup func())
+		provider func(t *testing.T, size uint64) (uri string, cleanup func())
+		size     uint64
 	}{
 		{
 			name: "UNIX domain socket",
-			provider: func(t *testing.T, ctx context.Context, bin string) (uri string, cleanup func()) {
-				ctx, cancel := context.WithCancel(ctx)
-
+			size: 8 * megabyte,
+			provider: func(t *testing.T, size uint64) (uri string, cleanup func()) {
 				d := t.TempDir()
 				socket := filepath.Join(d, "nbd-test.sock")
-
-				args := []string{
-					"-U",
-					socket,
-					"memory",
-					"8M",
-				}
-				args = append(defaultArgs, args...)
-
-				cmd := exec.CommandContext(ctx, bin, args...)
-				err := cmd.Start()
+				cleanup, err := provideNBDUnix(socket, size)
 				if err != nil {
-					t.Fatalf("start nbdkit: %v", err)
+					t.Fatal(err)
 				}
-
-				for {
-					_, err := os.Stat(socket)
-					if err == nil {
-						break
-					}
-					if os.IsNotExist(err) {
-						time.Sleep(100 * time.Millisecond)
-						continue
-					}
-					t.Fatalf("wait for nbdkit socket: %v", err)
-				}
-
-				cleanup = func() {
-					cancel()
-					_ = cmd.Wait()
-				}
-
 				return fmt.Sprintf("nbd+unix://?socket=%s", socket), cleanup
 			},
 		},
 	}
 
-	for _, p := range providers {
-		bin, err := exec.LookPath(nbdkit)
+	for _, tt := range tests {
+		_, err := exec.LookPath(nbdkitBin)
 		if err != nil {
 			t.Skip(err)
 		}
 
-		t.Run(p.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			u, cleanup := p.provider(t, ctx, bin)
+			u, cleanup := tt.provider(t, tt.size)
 			defer cleanup()
 
 			uri, err := ParseURI(u)
@@ -162,8 +121,8 @@ func TestNBD(t *testing.T) {
 				t.Fatalf("info: %v", err)
 			}
 
-			if info.Size != 8*1024*1024 /* 8M, as above */ {
-				t.Errorf("want size=8M, got size=%dM", (info.Size/1024)/1024)
+			if info.Size != tt.size {
+				t.Errorf("want size=%d, got size=%d", tt.size, info.Size)
 			}
 
 			info2, err := conn.Go(export, InfoRequestAll())
