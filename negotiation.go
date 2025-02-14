@@ -111,6 +111,12 @@ func (i *infoGoRequest) Serialize(buf *bytes.Buffer) error {
 	return nil
 }
 
+type startTLSRequest struct {
+	empty
+}
+
+func (*startTLSRequest) ID() uint32 { return nbdproto.OPT_STARTTLS }
+
 type infoRequest struct {
 	infoGoRequest
 }

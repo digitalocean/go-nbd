@@ -74,6 +74,10 @@ type Dialer struct {
 	// or zero-value to use defaults.
 	NetDialer *net.Dialer
 
+	// Deprecated: use [Conn.StartTLS] during option negotiation.
+	// This package's original behavior around this field was
+	// never correct.
+	//
 	// Pass in a TLS config if using NBD over TLS. Pass in nil
 	// or zero-value to use defaults.
 	TLSConfig *tls.Config
@@ -99,16 +103,7 @@ func (d *Dialer) Dial(ctx context.Context, uri *URI) (conn *Conn, err error) {
 		address = net.JoinHostPort(address, strconv.Itoa(DefaultPort))
 	}
 
-	var transport net.Conn
-	if strings.HasPrefix(uri.Scheme, "nbds") {
-		tlsDialer := tls.Dialer{
-			NetDialer: d.NetDialer,
-			Config:    d.TLSConfig,
-		}
-		transport, err = tlsDialer.DialContext(ctx, network, address)
-	} else {
-		transport, err = d.NetDialer.DialContext(ctx, network, address)
-	}
+	transport, err := d.NetDialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, fmt.Errorf("dial nbd: %w", err)
 	}
@@ -256,6 +251,33 @@ func (c *Conn) List() (exports []string, err error) {
 		exports = append(exports, r.Name)
 	}
 	return exports, nil
+}
+
+func (c *Conn) StartTLS(config *tls.Config) error {
+	if state := c.state(); state != connectionStateOptions {
+		return errNotOption
+	}
+
+	err := requestOption(c.conn, &startTLSRequest{})
+	if err != nil {
+		return err
+	}
+
+	reply, err := readOptionReply(c.conn)
+	if err != nil {
+		return err
+	}
+
+	if reply.Type != nbdproto.REP_ACK {
+		return errors.New("server did not reply with error or ACK")
+	}
+
+	if config == nil {
+		config = new(tls.Config)
+	}
+
+	c.conn = tls.Client(c.conn, config)
+	return nil
 }
 
 func (c *Conn) Info(name string, requests []InfoRequest) (ExportInfo, error) {
