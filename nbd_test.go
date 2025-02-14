@@ -4,6 +4,7 @@ package nbd
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -18,20 +19,36 @@ import (
 func TestNBD(t *testing.T) {
 	tests := []struct {
 		name     string
-		provider func(t *testing.T, size uint64) (uri string, cleanup func())
+		provider func(t *testing.T, size uint64) (uri string, tlsConf *tls.Config, cleanup func())
 		size     uint64
 	}{
 		{
-			name: "UNIX domain socket",
+			name: "nbd unix",
 			size: 8 * megabyte,
-			provider: func(t *testing.T, size uint64) (uri string, cleanup func()) {
+			provider: func(t *testing.T, size uint64) (uri string, tlsConf *tls.Config, cleanup func()) {
 				d := t.TempDir()
 				socket := filepath.Join(d, "nbd-test.sock")
-				cleanup, err := provideNBDUnix(socket, size)
+				cleanup, err := provideNBDUnix(t, socket, size)
 				if err != nil {
 					t.Fatal(err)
 				}
-				return fmt.Sprintf("nbd+unix://?socket=%s", socket), cleanup
+				return fmt.Sprintf("nbd+unix://?socket=%s", socket), nil, cleanup
+			},
+		},
+		{
+			name: "nbds unix",
+			size: 8 * megabyte,
+			provider: func(t *testing.T, size uint64) (uri string, tlsConf *tls.Config, cleanup func()) {
+				socketDir := t.TempDir()
+				pkiDir := t.TempDir()
+
+				socket := filepath.Join(socketDir, "nbds-test.sock")
+				tlsConf, cleanup, err := provideSecureNBDUnix(t, socket, size, pkiDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				return fmt.Sprintf("nbds+unix://?socket=%s", socket), tlsConf, cleanup
 			},
 		},
 	}
@@ -46,7 +63,7 @@ func TestNBD(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			u, cleanup := tt.provider(t, tt.size)
+			u, tlsConf, cleanup := tt.provider(t, tt.size)
 			defer cleanup()
 
 			uri, err := ParseURI(u)
@@ -58,7 +75,7 @@ func TestNBD(t *testing.T) {
 			dialer := new(Dialer)
 			conn, err := dialer.Dial(ctx, uri)
 			if err != nil {
-				t.Fatalf("parse NBD URI: %v", err)
+				t.Fatalf("dial: %v", err)
 				return
 			}
 			defer func() {
@@ -78,6 +95,13 @@ func TestNBD(t *testing.T) {
 					t.Errorf("abort: %v", err)
 				}
 			}()
+
+			if tlsConf != nil {
+				err := conn.StartTLS(tlsConf)
+				if err != nil {
+					t.Errorf("start tls: %v", err)
+				}
+			}
 
 			exports, err := conn.List()
 			if err != nil {

@@ -32,8 +32,6 @@ If you have a use-case for any of these things, please file an issue.
 * Old-style option negotation is specifically not supported.
 * `NBD_OPT_PEEK_EXPORT` - The protocol spec describes this as withdrawn and not
 in use.
-* `NBD_OPT_STARTTLS` - This module's Dialer has rudimentary though untested
-support for dialing over TLS.
 * `NBD_CMD_RESIZE` - The protocol spec describes this as defined by an experimental
 `RESIZE` extension.
 * `EXTENDED_HEADER` extension - the initial release of this module is targeting only
@@ -86,6 +84,7 @@ func (c *Conn) Info(name string, requests []InfoRequest) (ExportInfo, error)
 func (c *Conn) List() (exports []string, err error)
 func (c *Conn) ListMetaContext(export string, queries ...string) ([]MetaContext, error)
 func (c *Conn) SetMetaContext(export string, query string, additional ...string) ([]MetaContext, error)
+func (c *Conn) StartTLS(config *tls.Config) error
 func (c *Conn) StructuredReplies() error
 ```
 

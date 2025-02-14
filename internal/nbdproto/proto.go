@@ -30,6 +30,7 @@ const (
 	OPT_EXPORT_NAME       uint32 = 1
 	OPT_ABORT             uint32 = 2
 	OPT_LIST              uint32 = 3
+	OPT_STARTTLS          uint32 = 5
 	OPT_INFO              uint32 = 6
 	OPT_GO                uint32 = 7
 	OPT_STRUCTURED_REPLY  uint32 = 8
