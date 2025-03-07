@@ -122,6 +122,7 @@ func nbdkitTCP(
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
+		return wait, fmt.Errorf("waiting for pidfile: %w", err)
 	}
 
 	return wait, nil
@@ -199,6 +200,7 @@ func nbdkitUnix(t *testing.T, name string, size uint64, extra ...string) (wait f
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
+		return wait, fmt.Errorf("waiting for Unix socket: %w", err)
 	}
 
 	return wait, nil
