@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -24,6 +25,107 @@ var nbdkitBin = func(defaultValue string) string {
 	}
 	return defaultValue
 }("nbdkit")
+
+func provideNBD(
+	t *testing.T,
+	pidfile string,
+	size uint64,
+	port int,
+) (wait func(), err error) {
+	return nbdkitTCP(t, pidfile, size, port)
+}
+
+func provideSecureNBD(
+	t *testing.T,
+	pidfile string,
+	size uint64,
+	port int,
+	pkiDir string,
+) (tlsConf *tls.Config, wait func(), err error) {
+	wait = func() {}
+
+	ca, capriv, err := newTestCACertAndKey()
+	if err != nil {
+		return nil, wait, err
+	}
+
+	caCert, err := x509.ParseCertificate(ca)
+	if err != nil {
+		return nil, wait, fmt.Errorf("parse CA certificate: %w", err)
+	}
+
+	server, serverpriv, err := newServerCertAndKey(caCert, capriv)
+	if err != nil {
+		return nil, wait, err
+	}
+
+	err = nbdkitWritePKI(pkiDir, ca, server, serverpriv)
+	if err != nil {
+		return nil, wait, err
+	}
+
+	certPool := x509.NewCertPool()
+	certPool.AddCert(caCert)
+
+	tlsConf = &tls.Config{
+		RootCAs:            certPool,
+		InsecureSkipVerify: true,
+	}
+
+	extra := []string{
+		"--tls=require",
+		"--tls-certificates",
+		pkiDir,
+	}
+
+	wait, err = nbdkitTCP(t, pidfile, size, port, extra...)
+	if err != nil {
+		return nil, wait, err
+	}
+
+	return tlsConf, wait, nil
+}
+
+func nbdkitTCP(
+	t *testing.T,
+	pidfile string,
+	size uint64,
+	port int,
+	extra ...string,
+) (wait func(), err error) {
+	args := []string{
+		"--exit-with-parent",
+		"--pidfile",
+		pidfile,
+		"--port",
+		strconv.FormatInt(int64(port), 10),
+		"memory",
+		fmt.Sprintf("%dM", size/megabyte),
+	}
+
+	wait, err = nbdkit(t, append(extra, args...))
+	if err != nil {
+		return wait, err
+	}
+
+	// The --pidfile option has nbdkit write a file when it
+	// is ready to accept connections, so we can spin on this
+	// similar to the Unix domain socket tests to avoid trying
+	// to talk to nbdkit before it is ready.
+
+	for {
+		_, err := os.Stat(pidfile)
+		if err == nil {
+			break
+		}
+		if os.IsNotExist(err) {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+	}
+
+	return wait, nil
+}
 
 func provideNBDUnix(t *testing.T, name string, size uint64) (wait func(), err error) {
 	return nbdkitUnix(t, name, size)
