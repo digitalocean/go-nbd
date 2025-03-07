@@ -51,6 +51,41 @@ func TestNBD(t *testing.T) {
 				return fmt.Sprintf("nbds+unix://?socket=%s", socket), tlsConf, cleanup
 			},
 		},
+		{
+			name: "nbd tcp",
+			size: 8 * megabyte,
+			provider: func(t *testing.T, size uint64) (uri string, tlsConf *tls.Config, cleanup func()) {
+				pidfileDir := t.TempDir()
+
+				port := 10809
+
+				pidfile := filepath.Join(pidfileDir, "nbdkit.pid")
+				cleanup, err := provideNBD(t, pidfile, size, port)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				return fmt.Sprintf("nbd://localhost:%d", port), nil, cleanup
+			},
+		},
+		{
+			name: "nbds tcp",
+			size: 8 * megabyte,
+			provider: func(t *testing.T, size uint64) (uri string, tlsConf *tls.Config, cleanup func()) {
+				pidfileDir := t.TempDir()
+				pkiDir := t.TempDir()
+
+				port := 10810
+
+				pidfile := filepath.Join(pidfileDir, "nbdkit.pid")
+				tlsConf, cleanup, err := provideSecureNBD(t, pidfile, size, port, pkiDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				return fmt.Sprintf("nbds://localhost:%d", port), tlsConf, cleanup
+			},
+		},
 	}
 
 	for _, tt := range tests {
