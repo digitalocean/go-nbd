@@ -25,12 +25,12 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("nbd dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	err = conn.Connect()
 	if err != nil {
 		return fmt.Errorf("nbd connect: %w", err)
 	}
-	defer conn.Abort()
+	defer func() { _ = conn.Abort() }()
 	exports, err := conn.List()
 	if err != nil {
 		return fmt.Errorf("nbd list: %w", err)
@@ -64,7 +64,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("nbd: export name: %w", err)
 	}
-	defer conn.Disconnect()
+	defer func() { _ = conn.Disconnect() }()
 
 	// Note, you'll want to do something smarter for the length
 	// field if your export is larger than math.MaxUint32.
