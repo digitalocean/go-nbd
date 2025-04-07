@@ -482,18 +482,22 @@ func (c *Conn) Read(flags CommandFlags, offset uint64, length uint32) ([]Read, e
 			reads = append(reads, Read{Data: &ReadData{Offset: offset, Data: r.buf}})
 			return reads, nil
 		} else if r.structured != nil {
-			if r.structured.Type == nbdproto.REPLY_TYPE_OFFSET_DATA {
+			switch r.structured.Type {
+			case nbdproto.REPLY_TYPE_OFFSET_DATA:
 				var read ReadData
 				if err := read.UnmarshalNBDReply(r.buf); err != nil {
 					return nil, err
 				}
 				reads = append(reads, Read{Data: &read})
-			} else if r.structured.Type == nbdproto.REPLY_TYPE_OFFSET_HOLE {
+			case nbdproto.REPLY_TYPE_OFFSET_HOLE:
 				var read ReadHole
 				if err := read.UnmarshalNBDReply(r.buf); err != nil {
 					return nil, err
 				}
 				reads = append(reads, Read{Hole: &read})
+			default:
+				return nil, fmt.Errorf("read reply type is not data [%d] or hole [%d]: %d",
+					nbdproto.REPLY_TYPE_OFFSET_DATA, nbdproto.REPLY_TYPE_OFFSET_HOLE, r.structured.Type)
 			}
 		} else {
 			return nil, fmt.Errorf("did not receive simple or structured reply")

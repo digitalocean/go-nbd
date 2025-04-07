@@ -155,7 +155,7 @@ func nbdkitWritePKI(
 		if err != nil {
 			return fmt.Errorf("create %s: %w", filename, err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		err = pem.Encode(f, block)
 		if err != nil {
