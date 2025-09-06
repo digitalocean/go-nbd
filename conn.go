@@ -35,7 +35,10 @@ const (
 	connectionStateError
 )
 
-const DefaultPort = 10809
+const (
+	DefaultPort       = 10809
+	DefaultBufferSize = 5 * 1024
+)
 
 var schemes = []string{"nbd", "nbds", "nbd+unix", "nbds+unix"}
 
@@ -81,6 +84,10 @@ type Dialer struct {
 	// Pass in a TLS config if using NBD over TLS. Pass in nil
 	// or zero-value to use defaults.
 	TLSConfig *tls.Config
+
+	// Optional buffer for the connection to use. If one is not
+	// provided, one will be allocated at [DefaultBufferSize].
+	Buffer []byte
 }
 
 func (d *Dialer) Dial(ctx context.Context, uri *URI) (conn *Conn, err error) {
@@ -88,10 +95,21 @@ func (d *Dialer) Dial(ctx context.Context, uri *URI) (conn *Conn, err error) {
 		d.NetDialer = new(net.Dialer)
 	}
 
+	if len(d.Buffer) == 0 {
+		d.Buffer = make([]byte, DefaultBufferSize)
+	}
+
+	buflk := make(chan struct{}, 1)
+	buflk <- struct{}{}
+
 	conn = &Conn{
 		fixed:         false,
 		discardZeroes: true,
+
+		buflk: buflk,
+		buf:   d.Buffer,
 	}
+
 	conn.setState(connectionStateNew)
 
 	address := uri.Host
@@ -128,6 +146,9 @@ type Conn struct {
 	mu      sync.Mutex
 	streams map[uint64]stream
 	wg      *errgroup.Group
+
+	buflk chan struct{}
+	buf   []byte
 }
 
 func (c *Conn) Connect() (err error) {
@@ -230,13 +251,17 @@ func (c *Conn) List() (exports []string, err error) {
 		return nil, errNotOption
 	}
 
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	err = requestOption(c.conn, &listExportsRequest{})
 	if err != nil {
 		return nil, err
 	}
 
 	for {
-		reply, err := readOptionReply(c.conn)
+		reply, err := readOptionReply(c.conn, buf)
 		if err != nil {
 			return nil, err
 		}
@@ -258,12 +283,16 @@ func (c *Conn) StartTLS(config *tls.Config) error {
 		return errNotOption
 	}
 
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	err := requestOption(c.conn, &startTLSRequest{})
 	if err != nil {
 		return err
 	}
 
-	reply, err := readOptionReply(c.conn)
+	reply, err := readOptionReply(c.conn, buf)
 	if err != nil {
 		return err
 	}
@@ -284,24 +313,34 @@ func (c *Conn) Info(name string, requests []InfoRequest) (ExportInfo, error) {
 	if state := c.state(); state != connectionStateOptions {
 		return ExportInfo{}, errNotOption
 	}
+
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	return infoGo(c.conn, &infoRequest{
 		infoGoRequest: infoGoRequest{
 			export:   name,
 			requests: requests,
 		},
-	})
+	}, buf)
 }
 
 func (c *Conn) Go(name string, requests []InfoRequest) (ExportInfo, error) {
 	if state := c.state(); state != connectionStateOptions {
 		return ExportInfo{}, errNotOption
 	}
+
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	info, err := infoGo(c.conn, &goRequest{
 		infoGoRequest: infoGoRequest{
 			export:   name,
 			requests: requests,
 		},
-	})
+	}, buf)
 	if err != nil {
 		return info, err
 	}
@@ -312,7 +351,7 @@ func (c *Conn) Go(name string, requests []InfoRequest) (ExportInfo, error) {
 func infoGo[R interface {
 	*infoRequest | *goRequest
 	option
-}](server io.ReadWriter, opt R) (ExportInfo, error) {
+}](server io.ReadWriter, opt R, buf []byte) (ExportInfo, error) {
 	err := requestOption(server, opt)
 	if err != nil {
 		return ExportInfo{}, err
@@ -321,7 +360,7 @@ func infoGo[R interface {
 	var info ExportInfo
 
 	for {
-		reply, err := readOptionReply(server)
+		reply, err := readOptionReply(server, buf)
 		if err != nil {
 			return ExportInfo{}, err
 		}
@@ -375,11 +414,16 @@ func (c *Conn) StructuredReplies() error {
 	if state := c.state(); state != connectionStateOptions {
 		return errNotOption
 	}
+
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	err := requestOption(c.conn, &structuredRepliesRequest{})
 	if err != nil {
 		return err
 	}
-	reply, err := readOptionReply(c.conn)
+	reply, err := readOptionReply(c.conn, buf)
 	if err != nil {
 		return err
 	}
@@ -396,6 +440,11 @@ func (c *Conn) ListMetaContext(export string, queries ...string) ([]MetaContext,
 	if state := c.state(); state != connectionStateOptions {
 		return nil, errNotOption
 	}
+
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	err := requestOption(c.conn, &listMetaContextsRequest{
 		export:  export,
 		queries: queries,
@@ -407,7 +456,7 @@ func (c *Conn) ListMetaContext(export string, queries ...string) ([]MetaContext,
 	var exports []MetaContext
 
 	for {
-		reply, err := readOptionReply(c.conn)
+		reply, err := readOptionReply(c.conn, buf)
 		if err != nil {
 			return nil, err
 		}
@@ -429,6 +478,11 @@ func (c *Conn) SetMetaContext(export string, query string, additional ...string)
 	if state := c.state(); state != connectionStateOptions {
 		return nil, errNotOption
 	}
+
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	err := requestOption(c.conn, &setMetaContext{
 		export:  export,
 		queries: append([]string{query}, additional...),
@@ -440,7 +494,7 @@ func (c *Conn) SetMetaContext(export string, query string, additional ...string)
 	var exports []MetaContext
 
 	for {
-		reply, err := readOptionReply(c.conn)
+		reply, err := readOptionReply(c.conn, buf)
 		if err != nil {
 			return nil, err
 		}
@@ -754,4 +808,12 @@ func (c *Conn) Close() error {
 		defer func() { _ = c.wg.Wait() }()
 	}
 	return c.conn.Close()
+}
+
+func acquire(lock chan struct{}) {
+	<-lock
+}
+
+func release(lock chan struct{}) {
+	lock <- struct{}{}
 }

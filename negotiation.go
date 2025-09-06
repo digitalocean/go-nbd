@@ -347,12 +347,18 @@ func requestOption(server io.Writer, opt option) error {
 	return nil
 }
 
-func readOptionReply(server io.Reader) (optionReply, error) {
+func readOptionReply(server io.Reader, buf []byte) (optionReply, error) {
 	var header nbdproto.OptionReplyHeader
 	if err := binary.Read(server, binary.BigEndian, &header); err != nil {
 		return optionReply{}, err
 	}
-	buf := make([]byte, header.Length)
+
+	if int(header.Length) > len(buf) {
+		return optionReply{}, errPayloadTooLarge
+	}
+
+	buf = buf[:header.Length]
+
 	if _, err := io.ReadFull(server, buf); err != nil {
 		return optionReply{}, fmt.Errorf("read option reply payload: %w", err)
 	}

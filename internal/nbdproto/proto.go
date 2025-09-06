@@ -89,6 +89,8 @@ const (
 	ESHUTDOWN uint32 = 108
 )
 
+const MaximumStringLength = 4096
+
 type NegotiationHeader struct {
 	Magic   uint64
 	Version uint64

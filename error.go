@@ -3,6 +3,7 @@
 package nbd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/digitalocean/go-nbd/internal/nbdproto"
@@ -124,3 +125,5 @@ type NullOffset struct {
 	Value uint64
 	Valid bool
 }
+
+var errPayloadTooLarge = errors.New("payload size exceeds internal buffer")
