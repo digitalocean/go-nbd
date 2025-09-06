@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"unsafe"
 
 	"github.com/digitalocean/go-nbd/internal/nbdproto"
 )
@@ -327,17 +326,19 @@ func requestTransmit(server io.Writer, cflags uint16, ty uint16, cookie uint64, 
 	if l := len(payload); l > 0 {
 		header.Length = uint32(l)
 	}
-	psize := int(unsafe.Sizeof(header)) + len(payload)
-	packet := bytes.NewBuffer(make([]byte, 0, psize))
-	if err := binary.Write(packet, binary.BigEndian, header); err != nil {
+
+	if err := binary.Write(server, binary.BigEndian, header); err != nil {
 		return err
 	}
-	if err := binary.Write(packet, binary.BigEndian, payload); err != nil {
+
+	if len(payload) == 0 {
+		return nil
+	}
+
+	if err := binary.Write(server, binary.BigEndian, payload); err != nil {
 		return err
 	}
-	if _, err := io.Copy(server, packet); err != nil {
-		return err
-	}
+
 	return nil
 }
 
