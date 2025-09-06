@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/url"
 	"slices"
@@ -564,10 +563,6 @@ func (c *Conn) Read(flags CommandFlags, offset uint64, length uint32) ([]Read, e
 func (c *Conn) Write(flags CommandFlags, offset uint64, data []byte) error {
 	if state := c.state(); state != connectionStateTransmission {
 		return errNotTransmission
-	}
-
-	if len(data) > math.MaxUint32 {
-		return errors.New("payload size exceeds protocol limit")
 	}
 
 	cookie := c.cookie.Add(1)
