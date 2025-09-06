@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"unsafe"
 
 	"github.com/digitalocean/go-nbd/internal/nbdproto"
@@ -311,6 +312,10 @@ func (c *Conn) demuxReplies() (err error) {
 }
 
 func requestTransmit(server io.Writer, cflags uint16, ty uint16, cookie uint64, offset uint64, length uint32, payload []byte) error {
+	if len(payload) > math.MaxUint32 {
+		return errors.New("payload size exceeds protocol limit")
+	}
+
 	header := nbdproto.RequestHeader{
 		Magic:  nbdproto.REQUEST_MAGIC,
 		Flags:  cflags,
