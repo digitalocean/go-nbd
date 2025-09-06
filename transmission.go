@@ -45,43 +45,13 @@ const (
 	CommandFlagPayloadLen CommandFlags = 1 << 5
 )
 
-// ErrStreamClosing indicates the nbd client received data that it
-// did not expect or otherwise know how to handle and is therefore
-// abandoning the connection.
-var ErrStreamClosing = errors.New("nbd stream closing")
-
-// Read is an "enum-like" type. If Data is not nil, then it contains
-// data from the corresponding Read call. If Hole is not nil, then
-// that extent of the read is a hole. It is a bug if both are nil
-// or both are non-nil, please report it.
-type Read struct {
-	Data *ReadData
-	Hole *ReadHole
-}
-
-// ReadData contains data from a call to Read for a specified extent.
-// The extent is [ReadData.Offset, len(ReadData.Data)).
-type ReadData struct {
-	Offset uint64
-	Data   []byte
-}
-
-func (r *ReadData) UnmarshalNBDReply(data []byte) error {
-	buf := bytes.NewBuffer(data)
-	if err := binary.Read(buf, binary.BigEndian, &r.Offset); err != nil {
-		return fmt.Errorf("read offset: %w", err)
-	}
-	r.Data = buf.Bytes()
-	return nil
-}
-
-// ReadHole indicates this extent is a hole.
-type ReadHole struct {
+// readHole indicates this extent is a hole.
+type readHole struct {
 	Offset uint64
 	Length uint32
 }
 
-func (r *ReadHole) UnmarshalNBDReply(data []byte) error {
+func (r *readHole) UnmarshalNBDReply(data []byte) error {
 	buf := bytes.NewBuffer(data)
 	if err := binary.Read(buf, binary.BigEndian, &r.Offset); err != nil {
 		return fmt.Errorf("read offset: %w", err)
@@ -130,184 +100,128 @@ type BlockStatusDescriptor struct {
 	Status uint32
 }
 
-type reply struct {
+type transmissionHeader struct {
 	simple     *nbdproto.SimpleReplyHeader
 	structured *nbdproto.StructuredReplyHeader
-	buf        []byte
-	err        error
 }
 
-type stream struct {
-	replies chan reply
-	length  uint32
+func (t *transmissionHeader) DecodeFrom(r io.Reader) error {
+	var magic uint32
+	if err := binary.Read(r, binary.BigEndian, &magic); err != nil {
+		return fmt.Errorf("read magic: %w", err)
+	}
+	if magic != nbdproto.NBD_SIMPLE_REPLY_MAGIC && magic != nbdproto.NBD_STRUCTURED_REPLY_MAGIC {
+		return fmt.Errorf("got invalid magic %x", magic)
+	}
+	if magic == nbdproto.NBD_SIMPLE_REPLY_MAGIC {
+		hdr := nbdproto.SimpleReplyHeader{
+			Magic: magic,
+		}
+
+		if err := binary.Read(r, binary.BigEndian, &hdr.Error); err != nil {
+			return fmt.Errorf("simple: read error: %w", err)
+		}
+		if err := binary.Read(r, binary.BigEndian, &hdr.Cookie); err != nil {
+			return fmt.Errorf("simple: read cookie: %w", err)
+		}
+
+		t.simple = &hdr
+		return nil
+	}
+
+	hdr := nbdproto.StructuredReplyHeader{
+		Magic: nbdproto.NBD_STRUCTURED_REPLY_MAGIC,
+	}
+
+	if err := binary.Read(r, binary.BigEndian, &hdr.Flags); err != nil {
+		return fmt.Errorf("structured: read flags: %w", err)
+	}
+	if err := binary.Read(r, binary.BigEndian, &hdr.Type); err != nil {
+		return fmt.Errorf("structured: read type: %w", err)
+	}
+	if err := binary.Read(r, binary.BigEndian, &hdr.Cookie); err != nil {
+		return fmt.Errorf("structured: read cookie: %w", err)
+	}
+	if err := binary.Read(r, binary.BigEndian, &hdr.Length); err != nil {
+		return fmt.Errorf("structured: read length: %w", err)
+	}
+
+	t.structured = &hdr
+	return nil
 }
 
-func (c *Conn) addStream(cookie uint64, length uint32) (replies chan reply, drain func()) {
-	replies = make(chan reply, 1)
-	drain = func() {
-		for range replies {
-		}
+func (t *transmissionHeader) IsErr() bool {
+	if hdr := t.simple; hdr != nil {
+		return hdr.Error != 0
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.streams[cookie] = stream{
-		replies: replies,
-		length:  length,
+	if hdr := t.structured; hdr != nil {
+		return isTXError(hdr.Type)
 	}
-
-	return replies, drain
+	return false
 }
 
-func (c *Conn) demuxReplies() (err error) {
-	defer func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		for _, stream := range c.streams {
-			stream.replies <- reply{err: errors.Join(ErrStreamClosing, err)}
-			close(stream.replies)
-		}
-		c.streams = nil
-		c.setState(connectionStateError)
-	}()
-
-	for {
-		var magic uint32
-		if err := binary.Read(c.conn, binary.BigEndian, &magic); err != nil {
-			return fmt.Errorf("route replies: read magic: %w", err)
-		}
-		if magic != nbdproto.NBD_SIMPLE_REPLY_MAGIC && magic != nbdproto.NBD_STRUCTURED_REPLY_MAGIC {
-			return fmt.Errorf("route replies: got invalid magic %x", magic)
-		}
-		if magic == nbdproto.NBD_SIMPLE_REPLY_MAGIC {
-			hdr := nbdproto.SimpleReplyHeader{
-				Magic: magic,
-			}
-			if err := binary.Read(c.conn, binary.BigEndian, &hdr.Error); err != nil {
-				return fmt.Errorf("route replies: simple: read error: %w", err)
-			}
-			if err := binary.Read(c.conn, binary.BigEndian, &hdr.Cookie); err != nil {
-				return fmt.Errorf("route replies: simple: read cookie: %w", err)
-			}
-
-			var length uint32
-			func() {
-				// Avoid reading the expected length from the request
-				// if this is a simple error. This will leave length
-				// above to 0 so that we read 0 bytes below.
-				if hdr.Error != 0 {
-					return
-				}
-				c.mu.Lock()
-				defer c.mu.Unlock()
-				stream, ok := c.streams[hdr.Cookie]
-				if !ok {
-					return
-				}
-				length = stream.length
-			}()
-
-			buf := make([]byte, length)
-			if _, err := io.ReadFull(c.conn, buf); err != nil {
-				return fmt.Errorf("route replies: simple: read payload: %w", err)
-			}
-
-			func() {
-				c.mu.Lock()
-				defer c.mu.Unlock()
-				stream, ok := c.streams[hdr.Cookie]
-				if !ok {
-					return
-				}
-				var err error
-				if hdr.Error != 0 {
-					err = &TransmissionError{Code: TransmissionErrorCode(hdr.Error)}
-				}
-				r := reply{
-					simple: &hdr,
-					buf:    buf,
-					err:    err,
-				}
-				stream.replies <- r
-				close(stream.replies)
-				delete(c.streams, hdr.Cookie)
-			}()
-			continue
-		}
-
-		hdr := nbdproto.StructuredReplyHeader{
-			Magic: nbdproto.NBD_STRUCTURED_REPLY_MAGIC,
-		}
-		if err := binary.Read(c.conn, binary.BigEndian, &hdr.Flags); err != nil {
-			return fmt.Errorf("route replies: structured: read flags: %w", err)
-		}
-		if err := binary.Read(c.conn, binary.BigEndian, &hdr.Type); err != nil {
-			return fmt.Errorf("route replies: structured: read type: %w", err)
-		}
-		if err := binary.Read(c.conn, binary.BigEndian, &hdr.Cookie); err != nil {
-			return fmt.Errorf("route replies: structured: read cookie: %w", err)
-		}
-		if err := binary.Read(c.conn, binary.BigEndian, &hdr.Length); err != nil {
-			return fmt.Errorf("route replies: structured: read length: %w", err)
-		}
-		buf := make([]byte, hdr.Length)
-		if _, err := io.ReadFull(c.conn, buf); err != nil {
-			return fmt.Errorf("route replies: structured: read payload: %w", err)
-		}
-		var replyError error
-		if isTXError(hdr.Type) {
-			b := bytes.NewBuffer(buf)
-			var code uint32
-			if err := binary.Read(b, binary.BigEndian, &code); err != nil {
-				return fmt.Errorf("route replies: structured: read error code: %w", err)
-			}
-			var length uint16
-			if err := binary.Read(b, binary.BigEndian, &length); err != nil {
-				return fmt.Errorf("route replies: structured: read message length: %w", err)
-			}
-			var offset uint64
-			if hdr.Type == nbdproto.REPLY_TYPE_ERROR_OFFSET {
-				if err := binary.Read(b, binary.BigEndian, &offset); err != nil {
-					return fmt.Errorf("route replies: structured: read offset: %w", err)
-				}
-			}
-			m := b.String()
-			replyError = &TransmissionError{
-				Code: TransmissionErrorCode(code),
-				Message: NullErrorMessage{
-					Value: m,
-					Valid: len(m) > 0,
-				},
-				Offset: NullOffset{
-					Value: offset,
-					Valid: hdr.Type == nbdproto.REPLY_TYPE_ERROR_OFFSET,
-				},
-			}
-		}
-		func() {
-			c.mu.Lock()
-			defer c.mu.Unlock()
-			stream, ok := c.streams[hdr.Cookie]
-			if !ok {
-				return
-			}
-			r := reply{
-				structured: &hdr,
-				buf:        buf,
-				err:        replyError,
-			}
-			if replyError != nil {
-				r.buf = nil
-			}
-			stream.replies <- r
-			if hdr.Flags&nbdproto.REPLY_FLAG_DONE == 0 {
-				return
-			}
-			close(stream.replies)
-			delete(c.streams, hdr.Cookie)
-		}()
+func oneShotTransmit(
+	server io.ReadWriter,
+	cflags uint16,
+	type_ uint16,
+	cookie uint64,
+	offset uint64,
+	length uint32,
+	payload []byte,
+	buf []byte,
+) error {
+	err := requestTransmit(server, cflags, type_, cookie, offset, length, payload)
+	if err != nil {
+		return err
 	}
+
+	var hdr transmissionHeader
+	err = hdr.DecodeFrom(server)
+	if err != nil {
+		return err
+	}
+
+	if hdr.simple == nil && hdr.structured == nil {
+		return errors.New("invalid enum state for transmissionHeader")
+	}
+
+	cookieMismatch := errors.New("cookie mismatch")
+
+	if hdr.simple != nil && hdr.simple.Cookie != cookie {
+		return cookieMismatch
+	}
+
+	if hdr.structured != nil && hdr.structured.Cookie != cookie {
+		return cookieMismatch
+	}
+
+	if hdr.IsErr() {
+		var terr TransmissionError
+		d := transmissionErrorDecoder{
+			hdr: hdr,
+			buf: buf,
+			r:   server,
+		}
+		if err := d.Decode(&terr); err != nil {
+			return err
+		}
+		return &terr
+	}
+
+	if hdr.simple != nil {
+		return nil
+	}
+
+	if hdr.structured.Type != nbdproto.REPLY_TYPE_NONE {
+		return fmt.Errorf("unexpected REP_TYPE %d, expected %d",
+			hdr.structured.Type, nbdproto.REPLY_TYPE_NONE)
+	}
+
+	if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
+		return errors.New("server sent NBD_REP_TYPE_NONE without REPLY_FLAG_DONE")
+	}
+
+	return nil
 }
 
 func requestTransmit(server io.Writer, cflags uint16, ty uint16, cookie uint64, offset uint64, length uint32, payload []byte) error {
