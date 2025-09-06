@@ -11,9 +11,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-
 	"github.com/digitalocean/go-nbd/nbdmeta"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestNBD(t *testing.T) {
@@ -202,7 +201,7 @@ func TestNBD(t *testing.T) {
 			for i := 0; i < len(data); i++ {
 				data[i] = 0xce
 			}
-			err = conn.Write(CommandFlags(0), 0, data)
+			err = conn.Write(data, 0, CommandFlags(0))
 			if err != nil {
 				t.Errorf("write 512 0xce to offset 0: %v", err)
 			}
@@ -212,29 +211,31 @@ func TestNBD(t *testing.T) {
 				t.Errorf("flush: %v", err)
 			}
 
-			err = conn.Cache(CommandFlags(0), 512, 512)
+			err = conn.Cache(512, 512, CommandFlags(0))
 			if err != nil {
 				t.Errorf("cache 512, 1024: %v", err)
 			}
 
-			readData, err := conn.Read(CommandFlags(0), 0, 512)
+			got := make([]byte, 512)
+			n, err := conn.Read(got, 0, CommandFlags(0))
 			if err != nil {
-				t.Errorf("read first 512: %v", err)
+				t.Errorf("read first %d: %v", len(got), err)
 			}
 
-			got := make([]byte, len(data))
-			for _, r := range readData {
-				copy(got[r.Data.Offset:], r.Data.Data)
+			if n != len(got) {
+				t.Errorf("expected %d bytes read, got %d", len(got), n)
 			}
 
 			if !cmp.Equal(data, got) {
 				t.Error(t, cmp.Diff(data, got))
 			}
 
-			status, err := conn.BlockStatus(CommandFlags(0), 0, 1024)
+			statuses, err := conn.BlockStatus(0, 1024, CommandFlags(0))
 			if err != nil {
 				t.Errorf("block status: %v", err)
 			}
+
+			status := statuses[0]
 
 			if len(status.Descriptors) == 0 {
 				t.Errorf("want len(descriptors) > 0, got len(descriptors) == 0: %+v", status.Descriptors)
@@ -245,19 +246,18 @@ func TestNBD(t *testing.T) {
 				t.Errorf("first 512 bytes are not allocated, but should be %x", alloc)
 			}
 
-			err = conn.WriteZeroes(CommandFlags(0), 0, 512)
+			err = conn.WriteZeroes(0, 512, CommandFlags(0))
 			if err != nil {
 				t.Errorf("overwrite first 512 with zeroes: %v", err)
 			}
 
-			readData, err = conn.Read(CommandFlags(0), 0, 512)
+			n, err = conn.Read(got, 0, CommandFlags(0))
 			if err != nil {
 				t.Errorf("read first 512: %v", err)
 			}
 
-			got = make([]byte, len(data))
-			for _, r := range readData {
-				copy(got[r.Data.Offset:], r.Data.Data)
+			if n != len(got) {
+				t.Errorf("expected %d bytes read, got %d", len(got), n)
 			}
 
 			zeroes := make([]byte, 512)
@@ -265,7 +265,7 @@ func TestNBD(t *testing.T) {
 				t.Error(cmp.Diff(zeroes, got))
 			}
 
-			err = conn.Trim(CommandFlags(0), 0, 512)
+			err = conn.Trim(0, 512, CommandFlags(0))
 			if err != nil {
 				t.Errorf("trim first 512: %v", err)
 			}

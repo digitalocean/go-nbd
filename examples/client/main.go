@@ -68,13 +68,13 @@ func run() error {
 
 	// Note, you'll want to do something smarter for the length
 	// field if your export is larger than math.MaxUint32.
-	status, err := conn.BlockStatus(0, 0, uint32(size))
+	status, err := conn.BlockStatus(0, uint32(size), 0)
 	if err != nil {
 		return fmt.Errorf("nbd: block status: %w", err)
 	}
 	fmt.Println("allocation map")
 	var offset uint32
-	for _, d := range status.Descriptors {
+	for _, d := range status[0].Descriptors {
 		a := nbdmeta.BaseAllocationFlags(d.Status)
 		fmt.Printf("%10d: %d bytes %v\n", offset, d.Length, a)
 		offset += d.Length
@@ -83,7 +83,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("nbd: cache: %w", err)
 	}
-	_, err = conn.Read(0, 0, 512)
+	_, err = conn.Read(make([]byte, 512), 0, 0)
 	if err != nil {
 		return fmt.Errorf("nbd: read: %w", err)
 	}

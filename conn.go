@@ -14,11 +14,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
-
-	"golang.org/x/sync/errgroup"
+	"unsafe"
 
 	"github.com/digitalocean/go-nbd/internal/nbdproto"
 )
@@ -141,10 +139,6 @@ type Conn struct {
 	state_         atomic.Int32
 	inTransmission atomic.Bool
 	cookie         atomic.Uint64
-
-	mu      sync.Mutex
-	streams map[uint64]stream
-	wg      *errgroup.Group
 
 	buflk chan struct{}
 	buf   []byte
@@ -511,78 +505,120 @@ func (c *Conn) SetMetaContext(export string, query string, additional ...string)
 	return exports, nil
 }
 
-func (c *Conn) Read(flags CommandFlags, offset uint64, length uint32) ([]Read, error) {
+func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err error) {
 	if state := c.state(); state != connectionStateTransmission {
-		return nil, errNotTransmission
+		return 0, errNotTransmission
 	}
+
+	acquire(c.buflk)
+	defer release(c.buflk)
+	intbuf := c.buf
 
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, length)
-	defer drain()
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_READ, cookie, offset, length, nil)
+	err = requestTransmit(c.conn, uint16(flags), nbdproto.CMD_READ, cookie, offset, uint32(len(buf)), nil)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
-	var reads []Read
-
-	for r := range stream {
-		if r.err != nil {
-			return nil, r.err
+	for {
+		var hdr transmissionHeader
+		err = hdr.DecodeFrom(c.conn)
+		if err != nil {
+			return n, err
 		}
-		if r.simple != nil {
-			reads = append(reads, Read{Data: &ReadData{Offset: offset, Data: r.buf}})
-			return reads, nil
-		} else if r.structured != nil {
-			switch r.structured.Type {
-			case nbdproto.REPLY_TYPE_OFFSET_DATA:
-				var read ReadData
-				if err := read.UnmarshalNBDReply(r.buf); err != nil {
-					return nil, err
-				}
-				reads = append(reads, Read{Data: &read})
-			case nbdproto.REPLY_TYPE_OFFSET_HOLE:
-				var read ReadHole
-				if err := read.UnmarshalNBDReply(r.buf); err != nil {
-					return nil, err
-				}
-				reads = append(reads, Read{Hole: &read})
-			default:
-				return nil, fmt.Errorf("read reply type is not data [%d] or hole [%d]: %d",
-					nbdproto.REPLY_TYPE_OFFSET_DATA, nbdproto.REPLY_TYPE_OFFSET_HOLE, r.structured.Type)
+
+		if hdr.simple == nil && hdr.structured == nil {
+			return n, errors.New("invalid enum state for transmissionHeader")
+		}
+
+		cookieMismatch := errors.New("cookie mismatch")
+
+		if hdr.simple != nil && hdr.simple.Cookie != cookie {
+			return n, cookieMismatch
+		}
+
+		if hdr.structured != nil && hdr.structured.Cookie != cookie {
+			return n, cookieMismatch
+		}
+
+		if hdr.IsErr() {
+			var terr TransmissionError
+			d := transmissionErrorDecoder{
+				hdr: hdr,
+				buf: intbuf,
+				r:   c.conn,
 			}
-		} else {
-			return nil, fmt.Errorf("did not receive simple or structured reply")
+			if err := d.Decode(&terr); err != nil {
+				return n, err
+			}
+			return n, &terr
+		}
+
+		if hdr.simple != nil {
+			_, err := io.ReadFull(c.conn, buf)
+			if err != nil {
+				return n, fmt.Errorf("read data from simple chunk: %w", err)
+			}
+			return n, nil
+		}
+
+		switch hdr.structured.Type {
+		case nbdproto.REPLY_TYPE_NONE:
+			if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
+				return n, errors.New("server sent NBD_REP_TYPE_NONE without REPLY_FLAG_DONE")
+			}
+			return n, nil
+		case nbdproto.REPLY_TYPE_OFFSET_HOLE:
+			var hole readHole
+			if err := binary.Read(c.conn, binary.BigEndian, &hole); err != nil {
+				return n, fmt.Errorf("read hole offset from chunk: %w", err)
+			}
+			n += int(hole.Length)
+		case nbdproto.REPLY_TYPE_OFFSET_DATA:
+			var absoluteOffset uint64
+			if err := binary.Read(c.conn, binary.BigEndian, &absoluteOffset); err != nil {
+				return n, fmt.Errorf("read data offset from chunk: %w", err)
+			}
+
+			normalizedOffset := absoluteOffset - offset
+
+			datalen := int(hdr.structured.Length) - int(unsafe.Sizeof(absoluteOffset))
+
+			if int(normalizedOffset)+int(datalen) > len(buf) {
+				return n, errors.New("server chunk is too large for given buf")
+			}
+
+			written, err := io.ReadFull(c.conn, buf[normalizedOffset:])
+			n += written
+			if err != nil {
+				return n, fmt.Errorf("read chunk into buf: %w", err)
+			}
+		default:
+			return n, fmt.Errorf("unexpected REP_TYPE %d, expected one of [%d, %d, %d]",
+				hdr.structured.Type, nbdproto.REPLY_TYPE_NONE, nbdproto.REPLY_TYPE_OFFSET_HOLE, nbdproto.REPLY_TYPE_OFFSET_DATA)
+		}
+
+		if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
+			return n, nil
 		}
 	}
-
-	return reads, nil
 }
 
-func (c *Conn) Write(flags CommandFlags, offset uint64, data []byte) error {
+func (c *Conn) Write(data []byte, offset uint64, flags CommandFlags) error {
 	if state := c.state(); state != connectionStateTransmission {
 		return errNotTransmission
 	}
 
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
-	defer drain()
 
 	length := uint32(len(data))
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_WRITE, cookie, offset, length, data)
-	if err != nil {
-		return err
-	}
-
-	for r := range stream {
-		if r.err != nil {
-			return r.err
-		}
-	}
-
-	return nil
+	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_WRITE, cookie, offset, length, data, buf)
 }
 
 func (c *Conn) Flush(flags CommandFlags) error {
@@ -590,122 +626,139 @@ func (c *Conn) Flush(flags CommandFlags) error {
 		return errNotTransmission
 	}
 
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
-	defer drain()
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_FLUSH, cookie, 0, 0, nil)
-	if err != nil {
-		return err
-	}
-
-	for r := range stream {
-		if r.err != nil {
-			return r.err
-		}
-	}
-
-	return nil
+	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_FLUSH, cookie, 0, 0, nil, buf)
 }
 
-func (c *Conn) Trim(flags CommandFlags, offset uint64, length uint32) error {
+func (c *Conn) Trim(offset uint64, length uint32, flags CommandFlags) error {
 	if state := c.state(); state != connectionStateTransmission {
 		return errNotTransmission
 	}
 
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
-	defer drain()
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_TRIM, cookie, offset, length, nil)
-	if err != nil {
-		return err
-	}
-
-	for r := range stream {
-		if r.err != nil {
-			return r.err
-		}
-	}
-
-	return nil
+	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_TRIM, cookie, offset, length, nil, buf)
 }
 
-func (c *Conn) Cache(flags CommandFlags, offset uint64, length uint32) error {
+func (c *Conn) Cache(offset uint64, length uint32, flags CommandFlags) error {
 	if state := c.state(); state != connectionStateTransmission {
 		return errNotTransmission
 	}
 
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
-	defer drain()
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_CACHE, cookie, offset, length, nil)
-	if err != nil {
-		return err
-	}
-
-	for r := range stream {
-		if r.err != nil {
-			return r.err
-		}
-	}
-
-	return nil
+	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_CACHE, cookie, offset, length, nil, buf)
 }
 
-func (c *Conn) WriteZeroes(flags CommandFlags, offset uint64, length uint32) error {
+func (c *Conn) WriteZeroes(offset uint64, length uint32, flags CommandFlags) error {
 	if state := c.state(); state != connectionStateTransmission {
 		return errNotTransmission
 	}
 
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
-	defer drain()
 
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_WRITE_ZEROES, cookie, offset, length, nil)
-	if err != nil {
-		return err
-	}
-
-	for r := range stream {
-		if r.err != nil {
-			return r.err
-		}
-	}
-
-	return nil
+	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_WRITE_ZEROES, cookie, offset, length, nil, buf)
 }
 
-func (c *Conn) BlockStatus(flags CommandFlags, offset uint64, length uint32) (BlockStatus, error) {
+func (c *Conn) BlockStatus(offset uint64, length uint32, flags CommandFlags) ([]BlockStatus, error) {
 	if state := c.state(); state != connectionStateTransmission {
-		return BlockStatus{}, errNotTransmission
+		return nil, errNotTransmission
 	}
 
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
+
 	cookie := c.cookie.Add(1)
-	stream, drain := c.addStream(cookie, 0)
-	defer drain()
 
 	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_BLOCK_STATUS, cookie, offset, length, nil)
 	if err != nil {
-		return BlockStatus{}, err
+		return nil, err
 	}
 
-	var status BlockStatus
+	var statuses []BlockStatus
 
-	for r := range stream {
-		if r.err != nil {
-			return BlockStatus{}, r.err
+	for {
+		var hdr transmissionHeader
+		err = hdr.DecodeFrom(c.conn)
+		if err != nil {
+			return nil, err
 		}
-		if r.structured == nil {
-			return BlockStatus{}, errors.New("server did not send structured reply")
+
+		if hdr.simple == nil && hdr.structured == nil {
+			return nil, errors.New("invalid enum state for transmissionHeader")
 		}
-		if err := status.UnmarshalNBDReply(r.buf); err != nil {
-			return BlockStatus{}, err
+
+		if hdr.simple != nil {
+			return nil, errors.New("server sent simple reply to NBD_CMD_BLOCK_STATUS")
+		}
+
+		if hdr.structured != nil && hdr.structured.Cookie != cookie {
+			return nil, errors.New("cookie mismatch")
+		}
+
+		if hdr.IsErr() {
+			var terr TransmissionError
+			d := transmissionErrorDecoder{
+				hdr: hdr,
+				buf: buf,
+				r:   c.conn,
+			}
+			if err := d.Decode(&terr); err != nil {
+				return nil, err
+			}
+			return nil, &terr
+		}
+
+		switch hdr.structured.Type {
+		case nbdproto.REPLY_TYPE_NONE:
+			if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
+				return nil, errors.New("server sent NBD_REP_TYPE_NONE without REPLY_FLAG_DONE")
+			}
+			return statuses, nil
+		case nbdproto.REPLY_TYPE_BLOCK_STATUS:
+			if int(hdr.structured.Length) > len(buf) {
+				return nil, errPayloadTooLarge
+			}
+
+			buf := buf[:hdr.structured.Length]
+			_, err = io.ReadFull(c.conn, buf)
+			if err != nil {
+				return nil, fmt.Errorf("read block status bytes: %w", err)
+			}
+
+			var status BlockStatus
+			err := status.UnmarshalNBDReply(buf)
+			if err != nil {
+				return nil, fmt.Errorf("read block status payload: %w", err)
+			}
+			statuses = append(statuses, status)
+		default:
+			return nil, fmt.Errorf("unexpected REP_TYPE %d, expected one of [%d, %d]",
+				hdr.structured.Type, nbdproto.REPLY_TYPE_NONE, nbdproto.REPLY_TYPE_BLOCK_STATUS)
+		}
+
+		if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
+			return statuses, nil
 		}
 	}
-
-	return status, nil
 }
 
 var deadlineStates = []connectionState{
@@ -783,25 +836,11 @@ func (c *Conn) setState(s connectionState) {
 }
 
 func (c *Conn) enterTransmission() {
-	if c.inTransmission.Load() {
-		// FIXME: BUG?
-		return
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.streams = make(map[uint64]stream)
-	c.wg = new(errgroup.Group)
-	c.wg.Go(c.demuxReplies)
 	c.inTransmission.Store(true)
 	c.setState(connectionStateTransmission)
 }
 
 func (c *Conn) Close() error {
-	if c.inTransmission.Load() {
-		defer func() { _ = c.wg.Wait() }()
-	}
 	return c.conn.Close()
 }
 

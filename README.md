@@ -104,15 +104,15 @@ nbd.Conn:
 
 ```go
 func (c *Conn) Abort() error
-func (c *Conn) BlockStatus(flags CommandFlags, offset uint64, length uint32) (BlockStatus, error)
-func (c *Conn) Cache(flags CommandFlags, offset uint64, length uint32) error
+func (c *Conn) BlockStatus(offset uint64, length uint32, flags CommandFlags) ([]BlockStatus, error)
+func (c *Conn) Cache(offset uint64, length uint32, flags CommandFlags) error
 func (c *Conn) Close() error
 func (c *Conn) Disconnect() error
 func (c *Conn) Flush(flags CommandFlags) error
-func (c *Conn) Read(flags CommandFlags, offset uint64, length uint32) ([]Read, error)
-func (c *Conn) Trim(flags CommandFlags, offset uint64, length uint32) error
-func (c *Conn) Write(flags CommandFlags, offset uint64, data []byte) error
-func (c *Conn) WriteZeroes(flags CommandFlags, offset uint64, length uint32) error
+func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err error)
+func (c *Conn) Trim(offset uint64, length uint32, flags CommandFlags) error
+func (c *Conn) Write(data []byte, offset uint64, flags CommandFlags) error
+func (c *Conn) WriteZeroes(offset uint64, length uint32, flags CommandFlags) error
 ```
 
 ## FAQ
