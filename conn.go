@@ -263,6 +263,9 @@ func (c *Conn) List() (exports []string, err error) {
 	return exports, nil
 }
 
+// StartTLS upgrades the connection to TLS. Similar to [crypto/tls.Client],
+// config cannot be nil: users must set either ServerName or InsecureSkipVerify
+// in the config.
 func (c *Conn) StartTLS(config *tls.Config) error {
 	if state := c.state(); state != connectionStateOptions {
 		return errNotOption
@@ -284,10 +287,6 @@ func (c *Conn) StartTLS(config *tls.Config) error {
 
 	if reply.Type != nbdproto.REP_ACK {
 		return errors.New("server did not reply with error or ACK")
-	}
-
-	if config == nil {
-		config = new(tls.Config)
 	}
 
 	c.conn = tls.Client(c.conn, config)
