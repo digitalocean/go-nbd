@@ -74,14 +74,6 @@ type Dialer struct {
 	// or zero-value to use defaults.
 	NetDialer *net.Dialer
 
-	// Deprecated: use [Conn.StartTLS] during option negotiation.
-	// This package's original behavior around this field was
-	// never correct.
-	//
-	// Pass in a TLS config if using NBD over TLS. Pass in nil
-	// or zero-value to use defaults.
-	TLSConfig *tls.Config
-
 	// Optional buffer for the connection to use. If one is not
 	// provided, one will be allocated at [DefaultBufferSize].
 	Buffer []byte
