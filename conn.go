@@ -61,29 +61,21 @@ func ParseURI(s string) (*URI, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse nbd uri: %v", err)
 	}
-
 	if !slices.Contains(schemes, u.Scheme) {
 		return nil, fmt.Errorf("nbd uri scheme is not one of %v", schemes)
 	}
-
 	return &URI{URL: u}, nil
 }
 
 type Dialer struct {
-	// Pass in a net.Dialer to configure settings. Pass in nil
-	// or zero-value to use defaults.
 	NetDialer *net.Dialer
-
-	// Optional buffer for the connection to use. If one is not
-	// provided, one will be allocated at [DefaultBufferSize].
-	Buffer []byte
+	Buffer    []byte
 }
 
 func (d *Dialer) Dial(ctx context.Context, uri *URI) (conn *Conn, err error) {
 	if d.NetDialer == nil {
 		d.NetDialer = new(net.Dialer)
 	}
-
 	if len(d.Buffer) == 0 {
 		d.Buffer = make([]byte, DefaultBufferSize)
 	}
@@ -94,9 +86,8 @@ func (d *Dialer) Dial(ctx context.Context, uri *URI) (conn *Conn, err error) {
 	conn = &Conn{
 		fixed:         false,
 		discardZeroes: true,
-
-		buflk: buflk,
-		buf:   d.Buffer,
+		buflk:         buflk,
+		buf:           d.Buffer,
 	}
 
 	conn.setState(connectionStateNew)
@@ -141,29 +132,24 @@ func (c *Conn) Connect() (err error) {
 		return errors.New("duplicate call to connect")
 	}
 	defer func() {
-		if err == nil {
-			return
+		if err != nil {
+			c.setState(connectionStateError)
 		}
-		c.setState(connectionStateError)
 	}()
+
 	var hello nbdproto.NegotiationHeader
 	err = binary.Read(c.conn, binary.BigEndian, &hello)
 	if err != nil {
 		return fmt.Errorf("read first header: %w", err)
 	}
-
 	if hello.Magic != nbdproto.NBD_MAGIC {
-		return fmt.Errorf("expected NBD_MAGIC, got %x",
-			hello.Magic)
+		return fmt.Errorf("expected NBD_MAGIC, got %x", hello.Magic)
 	}
-
 	if hello.Version == nbdproto.CLI_SERV {
 		return fmt.Errorf("negotiation: server offered unsupported oldstyle negotiation")
 	}
-
 	if hello.Version != nbdproto.HAVE_OPT {
-		return fmt.Errorf("negotiation: expected IHAVEOPT, got %x",
-			hello.Version)
+		return fmt.Errorf("negotiation: expected IHAVEOPT, got %x", hello.Version)
 	}
 
 	var server uint16
@@ -177,7 +163,6 @@ func (c *Conn) Connect() (err error) {
 	}
 
 	client := uint32(nbdproto.FLAG_FIXED_NEWSTYLE)
-
 	if server&nbdproto.FLAG_NO_ZEROES != 0 {
 		client |= uint32(nbdproto.FLAG_NO_ZEROES)
 		c.discardZeroes = false
@@ -192,16 +177,16 @@ func (c *Conn) Connect() (err error) {
 	return nil
 }
 
-func (c *Conn) ExportName(name string) (size uint64, flags TransmissionFlags, err error) {
+func (c *Conn) ExportName(name string) (size uint64, flags nbdproto.TransmissionFlags, err error) {
 	if state := c.state(); state != connectionStateOptions {
 		return 0, 0, errNotOption
 	}
-	err = requestOption(c.conn, &exportNameRequest{
-		export: name,
-	})
+
+	err = requestOption(c.conn, &exportNameRequest{export: name})
 	if err != nil {
 		return 0, 0, err
 	}
+
 	var reply repExportName
 	err = binary.Read(c.conn, binary.BigEndian, &reply)
 	if err != nil {
@@ -224,11 +209,7 @@ func (c *Conn) Abort() error {
 	if c.inTransmission.Load() {
 		return nil
 	}
-	err := requestOption(c.conn, &abortRequest{})
-	if err != nil {
-		return err
-	}
-	return nil
+	return requestOption(c.conn, &abortRequest{})
 }
 
 func (c *Conn) List() (exports []string, err error) {
@@ -263,48 +244,18 @@ func (c *Conn) List() (exports []string, err error) {
 	return exports, nil
 }
 
-// StartTLS upgrades the connection to TLS.
-// - config must not be nil.
-// - if ServerName is empty and InsecureSkipVerify is false, we attempt to
-//   derive a ServerName from the remote address. If that fails, we return an error.
-// - we force an immediate TLS Handshake under a deadline so that verification
-//   errors surface immediately instead of silently accepting a bad TLS state.
-// - underlying c.conn is replaced only after a successful handshake & verification.
+// StartTLS upgrades the connection to TLS. Config must set either ServerName or InsecureSkipVerify.
 func (c *Conn) StartTLS(config *tls.Config) error {
 	if state := c.state(); state != connectionStateOptions {
 		return errNotOption
 	}
 
-	if config == nil {
-		return fmt.Errorf("tls config must not be nil")
-	}
-
-	// Defensive clone so we don't mutate caller's config unexpectedly.
-	cfg := config.Clone()
-
-	// If ServerName is not provided and caller didn't disable verification,
-	// try to derive it from the remote address (host portion).
-	if cfg.ServerName == "" && !cfg.InsecureSkipVerify {
-		if addr := c.conn.RemoteAddr(); addr != nil {
-			if host, _, err := net.SplitHostPort(addr.String()); err == nil && host != "" {
-				cfg.ServerName = host
-			} else if host := addr.String(); host != "" && !strings.Contains(host, ":") {
-				// if RemoteAddr has no port, use raw string
-				cfg.ServerName = host
-			}
-		}
-		// still empty -> require explicit ServerName to avoid silent verification bypass
-		if cfg.ServerName == "" {
-			return fmt.Errorf("tls config.ServerName required unless InsecureSkipVerify is true")
-		}
-	}
-
 	acquire(c.buflk)
 	defer release(c.buflk)
 	buf := c.buf
 
-	// Send OPT_STARTTLS
-	if err := requestOption(c.conn, &startTLSRequest{}); err != nil {
+	err := requestOption(c.conn, &startTLSRequest{})
+	if err != nil {
 		return err
 	}
 
@@ -312,240 +263,13 @@ func (c *Conn) StartTLS(config *tls.Config) error {
 	if err != nil {
 		return err
 	}
+
 	if reply.Type != nbdproto.REP_ACK {
 		return errors.New("server did not reply with error or ACK")
 	}
 
-	// Wrap connection
-	tlsConn := tls.Client(c.conn, cfg)
-
-	// Force handshake with a deadline to avoid hangs / pre-TLS injection stalls.
-	handshakeDeadline := time.Now().Add(5 * time.Second)
-	// Set deadline on tlsConn if possible; fall back to underlying conn.
-	_ = tlsConn.SetDeadline(handshakeDeadline)
-
-	if err := tlsConn.Handshake(); err != nil {
-		_ = tlsConn.Close()
-		return fmt.Errorf("tls handshake failed: %w", err)
-	}
-
-	// Explicit hostname verification (defensive, double-check)
-	if !cfg.InsecureSkipVerify && cfg.ServerName != "" {
-		if err := tlsConn.VerifyHostname(cfg.ServerName); err != nil {
-			_ = tlsConn.Close()
-			return fmt.Errorf("tls hostname verification failed: %w", err)
-		}
-	}
-
-	// Clear deadline so normal IO isn't impacted after upgrade.
-	_ = tlsConn.SetDeadline(time.Time{})
-
-	// Swap the underlying connection only after successful handshake & verification.
-	c.conn = tlsConn
+	c.conn = tls.Client(c.conn, config)
 	return nil
-}
-
-func (c *Conn) Info(name string, requests []InfoRequest) (ExportInfo, error) {
-	if state := c.state(); state != connectionStateOptions {
-		return ExportInfo{}, errNotOption
-	}
-
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	return infoGo(c.conn, &infoRequest{
-		infoGoRequest: infoGoRequest{
-			export:   name,
-			requests: requests,
-		},
-	}, buf)
-}
-
-func (c *Conn) Go(name string, requests []InfoRequest) (ExportInfo, error) {
-	if state := c.state(); state != connectionStateOptions {
-		return ExportInfo{}, errNotOption
-	}
-
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	info, err := infoGo(c.conn, &goRequest{
-		infoGoRequest: infoGoRequest{
-			export:   name,
-			requests: requests,
-		},
-	}, buf)
-	if err != nil {
-		return info, err
-	}
-	c.enterTransmission()
-	return info, nil
-}
-
-func infoGo[R interface {
-	*infoRequest | *goRequest
-	option
-}](server io.ReadWriter, opt R, buf []byte) (ExportInfo, error) {
-	err := requestOption(server, opt)
-	if err != nil {
-		return ExportInfo{}, err
-	}
-
-	var info ExportInfo
-
-	for {
-		reply, err := readOptionReply(server, buf)
-		if err != nil {
-			return ExportInfo{}, err
-		}
-		if reply.Type == nbdproto.REP_ACK {
-			break
-		}
-		var r repInfo
-		err = r.UnmarshalNBDReply(reply.Payload)
-		if err != nil {
-			return ExportInfo{}, err
-		}
-		switch r.Type {
-		case nbdproto.INFO_EXPORT:
-			var i repInfoExport
-			err = i.UnmarshalNBDReply(r.Payload)
-			if err != nil {
-				return ExportInfo{}, err
-			}
-			info.Size = i.Size
-			info.TransmissionFlags = i.Flags
-		case nbdproto.INFO_NAME:
-			var i repInfoName
-			err = i.UnmarshalNBDReply(r.Payload)
-			if err != nil {
-				return ExportInfo{}, err
-			}
-			info.Name = i.Name
-		case nbdproto.INFO_DESCRIPTION:
-			var i repInfoDescription
-			err = i.UnmarshalNBDReply(r.Payload)
-			if err != nil {
-				return ExportInfo{}, err
-			}
-			info.Description = i.Description
-		case nbdproto.INFO_BLOCK_SIZE:
-			var i repInfoBlockSize
-			err = i.UnmarshalNBDReply(r.Payload)
-			if err != nil {
-				return ExportInfo{}, err
-			}
-			info.MinBlockSize = i.MinimumBlockSize
-			info.PreferredBlockSize = i.PreferredBlockSize
-			info.MaxBlockSize = i.MaximumBlockSize
-		}
-	}
-
-	return info, nil
-}
-
-func (c *Conn) StructuredReplies() error {
-	if state := c.state(); state != connectionStateOptions {
-		return errNotOption
-	}
-
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	err := requestOption(c.conn, &structuredRepliesRequest{})
-	if err != nil {
-		return err
-	}
-	reply, err := readOptionReply(c.conn, buf)
-	if err != nil {
-		return err
-	}
-	var r ack
-	err = r.UnmarshalNBDReply(reply.Payload)
-	if err != nil {
-		return err
-	}
-	c.structured = true
-	return nil
-}
-
-func (c *Conn) ListMetaContext(export string, queries ...string) ([]MetaContext, error) {
-	if state := c.state(); state != connectionStateOptions {
-		return nil, errNotOption
-	}
-
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	err := requestOption(c.conn, &listMetaContextsRequest{
-		export:  export,
-		queries: queries,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	var exports []MetaContext
-
-	for {
-		reply, err := readOptionReply(c.conn, buf)
-		if err != nil {
-			return nil, err
-		}
-		if reply.Type == nbdproto.REP_ACK {
-			break
-		}
-		var r repMetaContext
-		err = r.UnmarshalNBDReply(reply.Payload)
-		if err != nil {
-			return nil, err
-		}
-		exports = append(exports, MetaContext{Name: r.Name})
-	}
-
-	return exports, nil
-}
-
-func (c *Conn) SetMetaContext(export string, query string, additional ...string) ([]MetaContext, error) {
-	if state := c.state(); state != connectionStateOptions {
-		return nil, errNotOption
-	}
-
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	err := requestOption(c.conn, &setMetaContext{
-		export:  export,
-		queries: append([]string{query}, additional...),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	var exports []MetaContext
-
-	for {
-		reply, err := readOptionReply(c.conn, buf)
-		if err != nil {
-			return nil, err
-		}
-		if reply.Type == nbdproto.REP_ACK {
-			break
-		}
-		var r repMetaContext
-		err = r.UnmarshalNBDReply(reply.Payload)
-		if err != nil {
-			return nil, err
-		}
-		exports = append(exports, MetaContext{Name: r.Name})
-	}
-
-	return exports, nil
 }
 
 func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err error) {
@@ -580,18 +304,13 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 		if hdr.simple != nil && hdr.simple.Cookie != cookie {
 			return n, cookieMismatch
 		}
-
 		if hdr.structured != nil && hdr.structured.Cookie != cookie {
 			return n, cookieMismatch
 		}
 
 		if hdr.IsErr() {
 			var terr TransmissionError
-			d := transmissionErrorDecoder{
-				hdr: hdr,
-				buf: intbuf,
-				r:   c.conn,
-			}
+			d := transmissionErrorDecoder{hdr: hdr, buf: intbuf, r: c.conn}
 			if err := d.Decode(&terr); err != nil {
 				return n, err
 			}
@@ -625,7 +344,6 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 			}
 
 			normalizedOffset := absoluteOffset - offset
-
 			datalen := int(hdr.structured.Length) - int(unsafe.Sizeof(absoluteOffset))
 
 			if int(normalizedOffset)+int(datalen) > len(buf) {
@@ -638,249 +356,13 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 				return n, fmt.Errorf("read chunk into buf: %w", err)
 			}
 		default:
-			return n, fmt.Errorf("unexpected REP_TYPE %d, expected one of [%d, %d, %d]",
-				hdr.structured.Type, nbdproto.REPLY_TYPE_NONE, nbdproto.REPLY_TYPE_OFFSET_HOLE, nbdproto.REPLY_TYPE_OFFSET_DATA)
+			return n, fmt.Errorf("unexpected REP_TYPE %d", hdr.structured.Type)
 		}
 
 		if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
 			return n, nil
 		}
 	}
-}
-
-func (c *Conn) Write(data []byte, offset uint64, flags CommandFlags) error {
-	if state := c.state(); state != connectionStateTransmission {
-		return errNotTransmission
-	}
-
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	cookie := c.cookie.Add(1)
-
-	length := uint32(len(data))
-
-	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_WRITE, cookie, offset, length, data, buf)
-}
-
-func (c *Conn) Flush(flags CommandFlags) error {
-	if state := c.state(); state != connectionStateTransmission {
-		return errNotTransmission
-	}
-
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	cookie := c.cookie.Add(1)
-
-	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_FLUSH, cookie, 0, 0, nil, buf)
-}
-
-func (c *Conn) Trim(offset uint64, length uint32, flags CommandFlags) error {
-	if state := c.state(); state != connectionStateTransmission {
-		return errNotTransmission
-	}
-
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	cookie := c.cookie.Add(1)
-
-	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_TRIM, cookie, offset, length, nil, buf)
-}
-
-func (c *Conn) Cache(offset uint64, length uint32, flags CommandFlags) error {
-	if state := c.state(); state != connectionStateTransmission {
-		return errNotTransmission
-	}
-
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	cookie := c.cookie.Add(1)
-
-	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_CACHE, cookie, offset, length, nil, buf)
-}
-
-func (c *Conn) WriteZeroes(offset uint64, length uint32, flags CommandFlags) error {
-	if state := c.state(); state != connectionStateTransmission {
-		return errNotTransmission
-	}
-
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	cookie := c.cookie.Add(1)
-
-	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_WRITE_ZEROES, cookie, offset, length, nil, buf)
-}
-
-func (c *Conn) BlockStatus(offset uint64, length uint32, flags CommandFlags) ([]BlockStatus, error) {
-	if state := c.state(); state != connectionStateTransmission {
-		return nil, errNotTransmission
-	}
-
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	cookie := c.cookie.Add(1)
-
-	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_BLOCK_STATUS, cookie, offset, length, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var statuses []BlockStatus
-
-	for {
-		var hdr transmissionHeader
-		err = hdr.DecodeFrom(c.conn)
-		if err != nil {
-			return nil, err
-		}
-
-		if hdr.simple == nil && hdr.structured == nil {
-			return nil, errors.New("invalid enum state for transmissionHeader")
-		}
-
-		if hdr.simple != nil {
-			return nil, errors.New("server sent simple reply to NBD_CMD_BLOCK_STATUS")
-		}
-
-		if hdr.structured != nil && hdr.structured.Cookie != cookie {
-			return nil, errors.New("cookie mismatch")
-		}
-
-		if hdr.IsErr() {
-			var terr TransmissionError
-			d := transmissionErrorDecoder{
-				hdr: hdr,
-				buf: buf,
-				r:   c.conn,
-			}
-			if err := d.Decode(&terr); err != nil {
-				return nil, err
-			}
-			return nil, &terr
-		}
-
-		switch hdr.structured.Type {
-		case nbdproto.REPLY_TYPE_NONE:
-			if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
-				return nil, errors.New("server sent NBD_REP_TYPE_NONE without REPLY_FLAG_DONE")
-			}
-			return statuses, nil
-		case nbdproto.REPLY_TYPE_BLOCK_STATUS:
-			if int(hdr.structured.Length) > len(buf) {
-				return nil, errPayloadTooLarge
-			}
-
-			buf := buf[:hdr.structured.Length]
-			_, err = io.ReadFull(c.conn, buf)
-			if err != nil {
-				return nil, fmt.Errorf("read block status bytes: %w", err)
-			}
-
-			var status BlockStatus
-			err := status.UnmarshalNBDReply(buf)
-			if err != nil {
-				return nil, fmt.Errorf("read block status payload: %w", err)
-			}
-			statuses = append(statuses, status)
-		default:
-			return nil, fmt.Errorf("unexpected REP_TYPE %d, expected one of [%d, %d]",
-				hdr.structured.Type, nbdproto.REPLY_TYPE_NONE, nbdproto.REPLY_TYPE_BLOCK_STATUS)
-		}
-
-		if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
-			return statuses, nil
-		}
-	}
-}
-
-var deadlineStates = []connectionState{
-	connectionStateNew,
-	connectionStateOptions,
-	connectionStateTransmission,
-}
-
-var errDeadlineImpossible = errors.New("connection state not one of: new, option, transmission")
-
-// SetDeadline sets the Read and Write deadlines associated with the
-// underlying connection. See Conn.SetReadDeadline for caveats
-// on its use during the transmission phase.
-//
-// Otherwise, expect the same behavior as net.Conn.SetDeadline.
-func (c *Conn) SetDeadline(t time.Time) error {
-	if !slices.Contains(deadlineStates, c.state()) {
-		return errDeadlineImpossible
-	}
-	return c.conn.SetDeadline(t)
-}
-
-// SetReadDeadline sets the Read deadline associated with the underlying
-// connection.
-//
-// Note that if the NBD server exceeds the deadline set here during the
-// transmission phase, the nbd.Conn will enter an error state and cannot
-// be reused. The transmission phase is not strictly a serialized client-
-// server-response-type situation, and this function does not apply a
-// deadline to a specific request-response stream, but the entire underlying
-// connection which contains an interleaving of messages to/from the NBD
-// server.
-//
-// Otherwise, expect the same behavior as net.Conn.SetReadDeadline.
-func (c *Conn) SetReadDeadline(t time.Time) error {
-	if !slices.Contains(deadlineStates, c.state()) {
-		return errDeadlineImpossible
-	}
-	return c.conn.SetReadDeadline(t)
-}
-
-// SetWriteDeadline sets the Write deadline associated with the underlying
-// connection. Expect the same behavior as net.Conn.SetWriteDeadline.
-func (c *Conn) SetWriteDeadline(t time.Time) error {
-	if !slices.Contains(deadlineStates, c.state()) {
-		return errDeadlineImpossible
-	}
-	return c.conn.SetWriteDeadline(t)
-}
-
-func (c *Conn) Disconnect() error {
-	if state := c.state(); state == connectionStateError {
-		return nil
-	}
-	if !c.inTransmission.Load() {
-		return errNotTransmission
-	}
-
-	cookie := c.cookie.Add(1)
-	err := requestTransmit(c.conn, 0, nbdproto.CMD_DISC, cookie, 0, 0, nil)
-	if err != nil {
-		return err
-	}
-
-	c.setState(connectionStateClosed)
-	return nil
-}
-
-func (c *Conn) state() connectionState {
-	return connectionState(c.state_.Load())
-}
-
-func (c *Conn) setState(s connectionState) {
-	c.state_.Store(int32(s))
-}
-
-func (c *Conn) enterTransmission() {
-	c.inTransmission.Store(true)
-	c.setState(connectionStateTransmission)
 }
 
 func (c *Conn) Close() error {
