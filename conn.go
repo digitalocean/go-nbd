@@ -263,20 +263,48 @@ func (c *Conn) List() (exports []string, err error) {
 	return exports, nil
 }
 
-// StartTLS upgrades the connection to TLS. Similar to [crypto/tls.Client],
-// config cannot be nil: users must set either ServerName or InsecureSkipVerify
-// in the config.
+// StartTLS upgrades the connection to TLS.
+// - config must not be nil.
+// - if ServerName is empty and InsecureSkipVerify is false, we attempt to
+//   derive a ServerName from the remote address. If that fails, we return an error.
+// - we force an immediate TLS Handshake under a deadline so that verification
+//   errors surface immediately instead of silently accepting a bad TLS state.
+// - underlying c.conn is replaced only after a successful handshake & verification.
 func (c *Conn) StartTLS(config *tls.Config) error {
 	if state := c.state(); state != connectionStateOptions {
 		return errNotOption
+	}
+
+	if config == nil {
+		return fmt.Errorf("tls config must not be nil")
+	}
+
+	// Defensive clone so we don't mutate caller's config unexpectedly.
+	cfg := config.Clone()
+
+	// If ServerName is not provided and caller didn't disable verification,
+	// try to derive it from the remote address (host portion).
+	if cfg.ServerName == "" && !cfg.InsecureSkipVerify {
+		if addr := c.conn.RemoteAddr(); addr != nil {
+			if host, _, err := net.SplitHostPort(addr.String()); err == nil && host != "" {
+				cfg.ServerName = host
+			} else if host := addr.String(); host != "" && !strings.Contains(host, ":") {
+				// if RemoteAddr has no port, use raw string
+				cfg.ServerName = host
+			}
+		}
+		// still empty -> require explicit ServerName to avoid silent verification bypass
+		if cfg.ServerName == "" {
+			return fmt.Errorf("tls config.ServerName required unless InsecureSkipVerify is true")
+		}
 	}
 
 	acquire(c.buflk)
 	defer release(c.buflk)
 	buf := c.buf
 
-	err := requestOption(c.conn, &startTLSRequest{})
-	if err != nil {
+	// Send OPT_STARTTLS
+	if err := requestOption(c.conn, &startTLSRequest{}); err != nil {
 		return err
 	}
 
@@ -284,12 +312,36 @@ func (c *Conn) StartTLS(config *tls.Config) error {
 	if err != nil {
 		return err
 	}
-
 	if reply.Type != nbdproto.REP_ACK {
 		return errors.New("server did not reply with error or ACK")
 	}
 
-	c.conn = tls.Client(c.conn, config)
+	// Wrap connection
+	tlsConn := tls.Client(c.conn, cfg)
+
+	// Force handshake with a deadline to avoid hangs / pre-TLS injection stalls.
+	handshakeDeadline := time.Now().Add(5 * time.Second)
+	// Set deadline on tlsConn if possible; fall back to underlying conn.
+	_ = tlsConn.SetDeadline(handshakeDeadline)
+
+	if err := tlsConn.Handshake(); err != nil {
+		_ = tlsConn.Close()
+		return fmt.Errorf("tls handshake failed: %w", err)
+	}
+
+	// Explicit hostname verification (defensive, double-check)
+	if !cfg.InsecureSkipVerify && cfg.ServerName != "" {
+		if err := tlsConn.VerifyHostname(cfg.ServerName); err != nil {
+			_ = tlsConn.Close()
+			return fmt.Errorf("tls hostname verification failed: %w", err)
+		}
+	}
+
+	// Clear deadline so normal IO isn't impacted after upgrade.
+	_ = tlsConn.SetDeadline(time.Time{})
+
+	// Swap the underlying connection only after successful handshake & verification.
+	c.conn = tlsConn
 	return nil
 }
 
