@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/digitalocean/go-nbd/internal/nbdproto"
+	"github.com/digitalocean/go-nbd/internal/span"
 )
 
 type connectionState int
@@ -512,6 +513,11 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 		return 0, err
 	}
 
+	wantedBlocks := span.Span[uint64]{
+		Start: offset,
+		End:   offset + uint64(len(buf)),
+	}
+
 	for {
 		var hdr transmissionHeader
 		err = hdr.DecodeFrom(c.conn)
@@ -565,6 +571,16 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 			if err := binary.Read(c.conn, binary.BigEndian, &hole); err != nil {
 				return n, fmt.Errorf("read hole offset from chunk: %w", err)
 			}
+
+			got := span.Span[uint64]{
+				Start: hole.Offset,
+				End:   hole.Offset + uint64(hole.Length),
+			}
+
+			if err := got.Check(); err != nil || !wantedBlocks.Contains(got) {
+				return n, newOutOfRangeError(wantedBlocks, got, "hole reply")
+			}
+
 			n += int(hole.Length)
 		case nbdproto.REPLY_TYPE_OFFSET_DATA:
 			var absoluteOffset uint64
@@ -572,13 +588,18 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 				return n, fmt.Errorf("read data offset from chunk: %w", err)
 			}
 
-			normalizedOffset := absoluteOffset - offset
+			datalen := uint64(hdr.structured.Length) - uint64(unsafe.Sizeof(absoluteOffset))
 
-			datalen := int(hdr.structured.Length) - int(unsafe.Sizeof(absoluteOffset))
-
-			if int(normalizedOffset)+int(datalen) > len(buf) {
-				return n, errors.New("server chunk is too large for given buf")
+			got := span.Span[uint64]{
+				Start: absoluteOffset,
+				End:   absoluteOffset + datalen,
 			}
+
+			if err := got.Check(); err != nil || !wantedBlocks.Contains(got) {
+				return n, newOutOfRangeError(wantedBlocks, got, "read reply")
+			}
+
+			normalizedOffset := absoluteOffset - offset
 
 			written, err := io.ReadFull(c.conn, buf[normalizedOffset:])
 			n += written
@@ -841,4 +862,9 @@ func acquire(lock chan struct{}) {
 
 func release(lock chan struct{}) {
 	lock <- struct{}{}
+}
+
+func newOutOfRangeError[T span.Number](want span.Span[T], got span.Span[T], msg string) error {
+	return fmt.Errorf("%s not in expected range [%d,%d], got [%d,%d]",
+		msg, want.Start, want.End, got.Start, got.End)
 }
