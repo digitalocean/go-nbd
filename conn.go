@@ -617,7 +617,7 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 
 			normalizedOffset := absoluteOffset - offset
 
-			written, err := io.ReadFull(c.conn, buf[normalizedOffset:])
+			written, err := io.ReadFull(c.conn, buf[normalizedOffset:normalizedOffset+datalen])
 			n += written
 			if err != nil {
 				return n, fmt.Errorf("read chunk into buf: %w", err)
