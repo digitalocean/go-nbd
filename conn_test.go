@@ -53,24 +53,24 @@ func newTestConn(response []byte) *Conn {
 
 // writeStructuredHoleChunk writes a structured reply chunk for a hole.
 func writeStructuredHoleChunk(w *bytes.Buffer, cookie uint64, flags uint16, offset uint64, length uint32) {
-	binary.Write(w, binary.BigEndian, nbdproto.NBD_STRUCTURED_REPLY_MAGIC)
-	binary.Write(w, binary.BigEndian, flags)
-	binary.Write(w, binary.BigEndian, nbdproto.REPLY_TYPE_OFFSET_HOLE)
-	binary.Write(w, binary.BigEndian, cookie)
-	binary.Write(w, binary.BigEndian, uint32(12)) // length of hole payload
-	binary.Write(w, binary.BigEndian, offset)
-	binary.Write(w, binary.BigEndian, length)
+	_ = binary.Write(w, binary.BigEndian, nbdproto.NBD_STRUCTURED_REPLY_MAGIC)
+	_ = binary.Write(w, binary.BigEndian, flags)
+	_ = binary.Write(w, binary.BigEndian, nbdproto.REPLY_TYPE_OFFSET_HOLE)
+	_ = binary.Write(w, binary.BigEndian, cookie)
+	_ = binary.Write(w, binary.BigEndian, uint32(12)) // length of hole payload
+	_ = binary.Write(w, binary.BigEndian, offset)
+	_ = binary.Write(w, binary.BigEndian, length)
 }
 
 // writeStructuredDataChunk writes a structured reply chunk for data.
 func writeStructuredDataChunk(w *bytes.Buffer, cookie uint64, flags uint16, offset uint64, data []byte) {
-	binary.Write(w, binary.BigEndian, nbdproto.NBD_STRUCTURED_REPLY_MAGIC)
-	binary.Write(w, binary.BigEndian, flags)
-	binary.Write(w, binary.BigEndian, nbdproto.REPLY_TYPE_OFFSET_DATA)
-	binary.Write(w, binary.BigEndian, cookie)
-	binary.Write(w, binary.BigEndian, uint32(8+len(data))) // offset + data
-	binary.Write(w, binary.BigEndian, offset)
-	w.Write(data)
+	_ = binary.Write(w, binary.BigEndian, nbdproto.NBD_STRUCTURED_REPLY_MAGIC)
+	_ = binary.Write(w, binary.BigEndian, flags)
+	_ = binary.Write(w, binary.BigEndian, nbdproto.REPLY_TYPE_OFFSET_DATA)
+	_ = binary.Write(w, binary.BigEndian, cookie)
+	_ = binary.Write(w, binary.BigEndian, uint32(8+len(data))) // offset + data
+	_ = binary.Write(w, binary.BigEndian, offset)
+	_, _ = w.Write(data)
 }
 
 func TestReadOverlappingChunks(t *testing.T) {
