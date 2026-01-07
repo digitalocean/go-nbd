@@ -518,6 +518,8 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 		End:   offset + uint64(len(buf)),
 	}
 
+	var coveredRegions []span.Span[uint64]
+
 	for {
 		var hdr transmissionHeader
 		err = hdr.DecodeFrom(c.conn)
@@ -581,6 +583,13 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 				return n, newOutOfRangeError(wantedBlocks, got, "hole reply")
 			}
 
+			for _, covered := range coveredRegions {
+				if covered.Overlaps(got) {
+					return n, fmt.Errorf("overlapping hole chunk at [%d, %d)", got.Start, got.End)
+				}
+			}
+			coveredRegions = append(coveredRegions, got)
+
 			n += int(hole.Length)
 		case nbdproto.REPLY_TYPE_OFFSET_DATA:
 			var absoluteOffset uint64
@@ -598,6 +607,13 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 			if err := got.Check(); err != nil || !wantedBlocks.Contains(got) {
 				return n, newOutOfRangeError(wantedBlocks, got, "read reply")
 			}
+
+			for _, covered := range coveredRegions {
+				if covered.Overlaps(got) {
+					return n, fmt.Errorf("overlapping data chunk at [%d, %d)", got.Start, got.End)
+				}
+			}
+			coveredRegions = append(coveredRegions, got)
 
 			normalizedOffset := absoluteOffset - offset
 
