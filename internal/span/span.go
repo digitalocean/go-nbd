@@ -32,3 +32,8 @@ func (s Span[T]) Check() error {
 func (s Span[T]) Contains(other Span[T]) bool {
 	return other.Start >= s.Start && other.End <= s.End
 }
+
+// Overlaps returns true if the two spans share any common region.
+func (s Span[T]) Overlaps(other Span[T]) bool {
+	return s.Start < other.End && other.Start < s.End
+}

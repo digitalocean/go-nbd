@@ -40,3 +40,39 @@ func TestSpanContains(t *testing.T) {
 		})
 	}
 }
+
+func TestSpanOverlaps(t *testing.T) {
+	tests := []struct {
+		a, b Span[int]
+		want bool
+	}{
+		{a: Span[int]{0, 10}, b: Span[int]{5, 15}, want: true},
+		{a: Span[int]{0, 10}, b: Span[int]{10, 20}, want: false},
+		{a: Span[int]{0, 10}, b: Span[int]{0, 10}, want: true},
+		{a: Span[int]{0, 10}, b: Span[int]{0, 5}, want: true},
+		{a: Span[int]{0, 10}, b: Span[int]{5, 10}, want: true},
+		{a: Span[int]{0, 10}, b: Span[int]{3, 7}, want: true},
+		{a: Span[int]{0, 5}, b: Span[int]{5, 10}, want: false},
+		{a: Span[int]{0, 5}, b: Span[int]{6, 10}, want: false},
+		{a: Span[int]{5, 10}, b: Span[int]{0, 5}, want: false},
+		{a: Span[int]{5, 10}, b: Span[int]{0, 6}, want: true},
+	}
+
+	for _, tt := range tests {
+		result := "overlaps"
+		if !tt.want {
+			result = "does not overlap"
+		}
+
+		name := fmt.Sprintf("(%d, %d) %s (%d, %d)",
+			tt.a.Start, tt.a.End, result, tt.b.Start, tt.b.End)
+
+		t.Run(name, func(t *testing.T) {
+			got := tt.a.Overlaps(tt.b)
+
+			if got != tt.want {
+				t.Errorf("want %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
