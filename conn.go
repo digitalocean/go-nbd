@@ -31,6 +31,7 @@ const (
 	connectionStateTransmission
 	connectionStateClosed
 	connectionStateError
+	connectionStateCanceled
 )
 
 const (
@@ -705,9 +706,29 @@ func (c *Conn) WriteZeroes(offset uint64, length uint32, flags CommandFlags) err
 	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_WRITE_ZEROES, cookie, offset, length, nil, buf)
 }
 
-func (c *Conn) BlockStatus(offset uint64, length uint32, flags CommandFlags) ([]BlockStatus, error) {
+// BlockStatusFunc is a push-based iterator for consuming the stream of
+// BlockStatus messages from the server.
+type BlockStatusFunc func(BlockStatus) error
+
+// ErrDone is a sentinel error that stops iteration when returned from
+// a push-based iterator such as [BlockStatusFunc].
+var ErrDone = errors.New("stop iteration")
+
+// BlockStatus queries an extent for its status.
+//
+// Note that the given [BlockStatusFunc] is a push iterator where callers
+// are expected to provide a callback so the data from each chunk can be
+// "pushed" to them.
+//
+// Callers can choose to stop iteration at any point by returning [ErrDone],
+// though be advised that halting iteration will leave the [Conn] in an invalid
+// state due to unconsumed messages. If callers would prefer to avoid recreating
+// a [Conn], they should try to "drain" these messages by discarding values pushed
+// to the iterator for as long as possible before returning [ErrDone] as a last
+// resort.
+func (c *Conn) BlockStatus(offset uint64, length uint32, yield BlockStatusFunc, flags CommandFlags) error {
 	if state := c.state(); state != connectionStateTransmission {
-		return nil, errNotTransmission
+		return errNotTransmission
 	}
 
 	acquire(c.buflk)
@@ -718,28 +739,26 @@ func (c *Conn) BlockStatus(offset uint64, length uint32, flags CommandFlags) ([]
 
 	err := requestTransmit(c.conn, uint16(flags), nbdproto.CMD_BLOCK_STATUS, cookie, offset, length, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	var statuses []BlockStatus
 
 	for {
 		var hdr transmissionHeader
 		err = hdr.DecodeFrom(c.conn)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		if hdr.simple == nil && hdr.structured == nil {
-			return nil, errors.New("invalid enum state for transmissionHeader")
+			return errors.New("invalid enum state for transmissionHeader")
 		}
 
 		if hdr.simple != nil {
-			return nil, errors.New("server sent simple reply to NBD_CMD_BLOCK_STATUS")
+			return errors.New("server sent simple reply to NBD_CMD_BLOCK_STATUS")
 		}
 
 		if hdr.structured != nil && hdr.structured.Cookie != cookie {
-			return nil, errors.New("cookie mismatch")
+			return errors.New("cookie mismatch")
 		}
 
 		if hdr.IsErr() {
@@ -750,41 +769,44 @@ func (c *Conn) BlockStatus(offset uint64, length uint32, flags CommandFlags) ([]
 				r:   c.conn,
 			}
 			if err := d.Decode(&terr); err != nil {
-				return nil, err
+				return err
 			}
-			return nil, &terr
+			return &terr
 		}
 
 		switch hdr.structured.Type {
 		case nbdproto.REPLY_TYPE_NONE:
 			if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
-				return nil, errors.New("server sent NBD_REP_TYPE_NONE without REPLY_FLAG_DONE")
+				return errors.New("server sent NBD_REP_TYPE_NONE without REPLY_FLAG_DONE")
 			}
-			return statuses, nil
+			return nil
 		case nbdproto.REPLY_TYPE_BLOCK_STATUS:
 			if int(hdr.structured.Length) > len(buf) {
-				return nil, errPayloadTooLarge
+				return errPayloadTooLarge
 			}
 
 			buf := buf[:hdr.structured.Length]
 			_, err = io.ReadFull(c.conn, buf)
 			if err != nil {
-				return nil, fmt.Errorf("read block status bytes: %w", err)
+				return fmt.Errorf("read block status bytes: %w", err)
 			}
 
 			var status BlockStatus
 			err := status.UnmarshalNBDReply(buf)
 			if err != nil {
-				return nil, fmt.Errorf("read block status payload: %w", err)
+				return fmt.Errorf("read block status payload: %w", err)
 			}
-			statuses = append(statuses, status)
+			if err := yield(status); errors.Is(err, ErrDone) {
+				c.setState(connectionStateCanceled)
+				return nil
+			}
 		default:
-			return nil, fmt.Errorf("unexpected REP_TYPE %d, expected one of [%d, %d]",
+			return fmt.Errorf("unexpected REP_TYPE %d, expected one of [%d, %d]",
 				hdr.structured.Type, nbdproto.REPLY_TYPE_NONE, nbdproto.REPLY_TYPE_BLOCK_STATUS)
 		}
 
 		if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
-			return statuses, nil
+			return nil
 		}
 	}
 }

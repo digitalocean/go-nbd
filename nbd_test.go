@@ -230,7 +230,13 @@ func TestNBD(t *testing.T) {
 				t.Error(t, cmp.Diff(data, got))
 			}
 
-			statuses, err := conn.BlockStatus(0, 1024, CommandFlags(0))
+			var statuses []BlockStatus
+			appendStatus := func(b BlockStatus) error {
+				statuses = append(statuses, b)
+				return nil
+			}
+
+			err = conn.BlockStatus(0, 1024, appendStatus, CommandFlags(0))
 			if err != nil {
 				t.Errorf("block status: %v", err)
 			}
