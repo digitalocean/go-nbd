@@ -104,7 +104,7 @@ nbd.Conn:
 
 ```go
 func (c *Conn) Abort() error
-func (c *Conn) BlockStatus(offset uint64, length uint32, flags CommandFlags) ([]BlockStatus, error)
+func (c *Conn) BlockStatus(offset uint64, length uint32, yield BlockStatusFunc, flags CommandFlags) error
 func (c *Conn) Cache(offset uint64, length uint32, flags CommandFlags) error
 func (c *Conn) Close() error
 func (c *Conn) Disconnect() error

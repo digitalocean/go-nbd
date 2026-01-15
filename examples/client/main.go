@@ -66,15 +66,29 @@ func run() error {
 	}
 	defer func() { _ = conn.Disconnect() }()
 
+	var (
+		status nbd.BlockStatus
+		stop   bool
+	)
+
+	iterator := func(b nbd.BlockStatus) error {
+		// Just accepting 1 chunk for the sake of example.
+		if !stop {
+			stop = true
+			status = b
+		}
+		return nil
+	}
+
 	// Note, you'll want to do something smarter for the length
 	// field if your export is larger than math.MaxUint32.
-	status, err := conn.BlockStatus(0, uint32(size), 0)
+	err = conn.BlockStatus(0, uint32(size), iterator, 0)
 	if err != nil {
 		return fmt.Errorf("nbd: block status: %w", err)
 	}
 	fmt.Println("allocation map")
 	var offset uint32
-	for _, d := range status[0].Descriptors {
+	for _, d := range status.Descriptors {
 		a := nbdmeta.BaseAllocationFlags(d.Status)
 		fmt.Printf("%10d: %d bytes %v\n", offset, d.Length, a)
 		offset += d.Length
