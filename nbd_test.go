@@ -153,7 +153,11 @@ func TestNBD(t *testing.T) {
 				t.Fatalf("set structured replies: %v", err)
 			}
 
-			metacontexts, err := conn.ListMetaContext(export)
+			var metacontexts []MetaContext
+			err = conn.ListMetaContext(export, nil, func(m MetaContext) error {
+				metacontexts = append(metacontexts, m)
+				return nil
+			})
 			if err != nil {
 				t.Fatalf("list meta contexts: %v", err)
 			}
@@ -165,7 +169,13 @@ func TestNBD(t *testing.T) {
 				t.Fatal("did not find base:allocation meta context")
 			}
 
-			setcontexts, err := conn.SetMetaContext(export, metacontexts[index].Name)
+			query := []string{metacontexts[index].Name}
+
+			var setcontexts []MetaContext
+			err = conn.SetMetaContext(export, query, func(m MetaContext) error {
+				setcontexts = append(setcontexts, m)
+				return nil
+			})
 			if err != nil {
 				t.Fatalf("set base:allocation as meta context: %v", err)
 			}

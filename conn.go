@@ -422,9 +422,16 @@ func (c *Conn) StructuredReplies() error {
 	return nil
 }
 
-func (c *Conn) ListMetaContext(export string, queries ...string) ([]MetaContext, error) {
+// MetaContextFunc is a push-based iterator for [Conn.ListMetaContext] and
+// [Conn.SetMetaContext]. Callers are expected to supply a callback matching
+// this signature so those methods may "push" chunks of data to the caller.
+//
+// See also [ErrDone].
+type MetaContextFunc func(m MetaContext) error
+
+func (c *Conn) ListMetaContext(export string, queries []string, yield MetaContextFunc) error {
 	if state := c.state(); state != connectionStateOptions {
-		return nil, errNotOption
+		return errNotOption
 	}
 
 	acquire(c.buflk)
@@ -436,15 +443,13 @@ func (c *Conn) ListMetaContext(export string, queries ...string) ([]MetaContext,
 		queries: queries,
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	var exports []MetaContext
 
 	for {
 		reply, err := readOptionReply(c.conn, buf)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if reply.Type == nbdproto.REP_ACK {
 			break
@@ -452,17 +457,24 @@ func (c *Conn) ListMetaContext(export string, queries ...string) ([]MetaContext,
 		var r repMetaContext
 		err = r.UnmarshalNBDReply(reply.Payload)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		exports = append(exports, MetaContext{Name: r.Name})
+		err = yield(MetaContext{Name: r.Name})
+		if err != nil {
+			c.setState(connectionStateCanceled)
+			if errors.Is(err, ErrDone) {
+				return nil
+			}
+			return err
+		}
 	}
 
-	return exports, nil
+	return nil
 }
 
-func (c *Conn) SetMetaContext(export string, query string, additional ...string) ([]MetaContext, error) {
+func (c *Conn) SetMetaContext(export string, queries []string, yield MetaContextFunc) error {
 	if state := c.state(); state != connectionStateOptions {
-		return nil, errNotOption
+		return errNotOption
 	}
 
 	acquire(c.buflk)
@@ -471,18 +483,16 @@ func (c *Conn) SetMetaContext(export string, query string, additional ...string)
 
 	err := requestOption(c.conn, &setMetaContext{
 		export:  export,
-		queries: append([]string{query}, additional...),
+		queries: queries,
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	var exports []MetaContext
 
 	for {
 		reply, err := readOptionReply(c.conn, buf)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if reply.Type == nbdproto.REP_ACK {
 			break
@@ -490,12 +500,19 @@ func (c *Conn) SetMetaContext(export string, query string, additional ...string)
 		var r repMetaContext
 		err = r.UnmarshalNBDReply(reply.Payload)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		exports = append(exports, MetaContext{Name: r.Name})
+		err = yield(MetaContext{Name: r.Name})
+		if err != nil {
+			c.setState(connectionStateCanceled)
+			if errors.Is(err, ErrDone) {
+				return nil
+			}
+			return err
+		}
 	}
 
-	return exports, nil
+	return nil
 }
 
 func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err error) {
@@ -711,7 +728,14 @@ func (c *Conn) WriteZeroes(offset uint64, length uint32, flags CommandFlags) err
 type BlockStatusFunc func(BlockStatus) error
 
 // ErrDone is a sentinel error that stops iteration when returned from
-// a push-based iterator such as [BlockStatusFunc].
+// a push-based iterator such as [BlockStatusFunc] or [MetaContextFunc].
+//
+// Callers can choose to stop iteration at any point by returning [ErrDone],
+// though be advised that halting iteration will leave the [Conn] in an invalid
+// state due to unconsumed messages. If callers would prefer to avoid recreating
+// a [Conn], they should try to "drain" these messages by discarding values pushed
+// to the iterator for as long as possible before returning [ErrDone] as a last
+// resort.
 var ErrDone = errors.New("stop iteration")
 
 // BlockStatus queries an extent for its status.
@@ -720,12 +744,7 @@ var ErrDone = errors.New("stop iteration")
 // are expected to provide a callback so the data from each chunk can be
 // "pushed" to them.
 //
-// Callers can choose to stop iteration at any point by returning [ErrDone],
-// though be advised that halting iteration will leave the [Conn] in an invalid
-// state due to unconsumed messages. If callers would prefer to avoid recreating
-// a [Conn], they should try to "drain" these messages by discarding values pushed
-// to the iterator for as long as possible before returning [ErrDone] as a last
-// resort.
+// See also [ErrDone].
 func (c *Conn) BlockStatus(offset uint64, length uint32, yield BlockStatusFunc, flags CommandFlags) error {
 	if state := c.state(); state != connectionStateTransmission {
 		return errNotTransmission
