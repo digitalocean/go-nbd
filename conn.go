@@ -815,9 +815,13 @@ func (c *Conn) BlockStatus(offset uint64, length uint32, yield BlockStatusFunc, 
 			if err != nil {
 				return fmt.Errorf("read block status payload: %w", err)
 			}
-			if err := yield(status); errors.Is(err, ErrDone) {
+			err = yield(status)
+			if err != nil {
 				c.setState(connectionStateCanceled)
-				return nil
+				if errors.Is(err, ErrDone) {
+					return nil
+				}
+				return err
 			}
 		default:
 			return fmt.Errorf("unexpected REP_TYPE %d, expected one of [%d, %d]",
