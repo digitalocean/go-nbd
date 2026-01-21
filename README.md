@@ -82,8 +82,8 @@ func (c *Conn) ExportName(name string) (size uint64, flags TransmissionFlags, er
 func (c *Conn) Go(name string, requests []InfoRequest) (ExportInfo, error)
 func (c *Conn) Info(name string, requests []InfoRequest) (ExportInfo, error)
 func (c *Conn) List() (exports []string, err error)
-func (c *Conn) ListMetaContext(export string, queries ...string) ([]MetaContext, error)
-func (c *Conn) SetMetaContext(export string, query string, additional ...string) ([]MetaContext, error)
+func (c *Conn) ListMetaContext(export string, queries []string, yield MetaContextFunc) error
+func (c *Conn) SetMetaContext(export string, queries []string, yield MetaContextFunc) error
 func (c *Conn) StartTLS(config *tls.Config) error
 func (c *Conn) StructuredReplies() error
 ```

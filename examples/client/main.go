@@ -44,7 +44,11 @@ func run() error {
 		return fmt.Errorf("nbd: info: %w", err)
 	}
 	fmt.Printf("info %+v\n", info)
-	metas, err := conn.ListMetaContext(name)
+	var metas []nbd.MetaContext
+	err = conn.ListMetaContext(name, nil, func(m nbd.MetaContext) error {
+		metas = append(metas, m)
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("nbd: list meta context: %w", err)
 	}
@@ -56,7 +60,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("nbd: set structured replies: %w", err)
 	}
-	_, err = conn.SetMetaContext(name, metas[0].Name)
+	err = conn.SetMetaContext(name, []string{metas[0].Name}, func(_ nbd.MetaContext) error { return nil })
 	if err != nil {
 		return fmt.Errorf("nbd: set meta context: %w", err)
 	}
