@@ -233,24 +233,32 @@ func (c *Conn) Abort() error {
 	return nil
 }
 
-func (c *Conn) List() (exports []string, err error) {
+// ListExportsFunc is a push-based iterator for [Conn.List].
+// Callers are expected to provide a callback matching this
+// signature so that [Conn.List] may "push" the results it
+// gets from the server to the caller.
+//
+// See also [ErrDone].
+type ListExportsFunc func(export string) error
+
+func (c *Conn) List(yield ListExportsFunc) error {
 	if state := c.state(); state != connectionStateOptions {
-		return nil, errNotOption
+		return errNotOption
 	}
 
 	acquire(c.buflk)
 	defer release(c.buflk)
 	buf := c.buf
 
-	err = requestOption(c.conn, &listExportsRequest{})
+	err := requestOption(c.conn, &listExportsRequest{})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	for {
 		reply, err := readOptionReply(c.conn, buf)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if reply.Type == nbdproto.REP_ACK {
 			break
@@ -258,11 +266,19 @@ func (c *Conn) List() (exports []string, err error) {
 		var r repServer
 		err = r.UnmarshalNBDReply(reply.Payload)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		exports = append(exports, r.Name)
+		err = yield(r.Name)
+		if err != nil {
+			c.setState(connectionStateCanceled)
+			if errors.Is(err, ErrDone) {
+				return nil
+			}
+			return err
+		}
 	}
-	return exports, nil
+
+	return nil
 }
 
 // StartTLS upgrades the connection to TLS. Similar to [crypto/tls.Client],
