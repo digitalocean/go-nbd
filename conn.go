@@ -311,105 +311,122 @@ func (c *Conn) StartTLS(config *tls.Config) error {
 	return nil
 }
 
-func (c *Conn) Info(name string, requests []InfoRequest) (ExportInfo, error) {
+// ExportInfoFunc is a push-based iterator for [Conn.Info] and [Conn.Go]
+// so that these methods may "push" data from the server back to the caller.
+//
+// Callers can see which pieces of information the server has sent thus far
+// by checking the [ExportInfo.ValidName], [ExportInfo.ValidExport],
+// [ExportInfo.ValidDescription], [ExportInfo.ValidBlockSize] fields.
+//
+// See also [ErrDone].
+type ExportInfoFunc func(info ExportInfo) error
+
+func (c *Conn) Info(name string, requests []InfoRequest, yield ExportInfoFunc) error {
 	if state := c.state(); state != connectionStateOptions {
-		return ExportInfo{}, errNotOption
+		return errNotOption
 	}
 
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
+	return c.infoGo(&infoRequest{infoGoRequest{
+		export:   name,
+		requests: requests,
+	}}, yield)
 
-	return infoGo(c.conn, &infoRequest{
-		infoGoRequest: infoGoRequest{
-			export:   name,
-			requests: requests,
-		},
-	}, buf)
 }
 
-func (c *Conn) Go(name string, requests []InfoRequest) (ExportInfo, error) {
+func (c *Conn) Go(name string, requests []InfoRequest, yield ExportInfoFunc) error {
 	if state := c.state(); state != connectionStateOptions {
-		return ExportInfo{}, errNotOption
+		return errNotOption
 	}
 
-	acquire(c.buflk)
-	defer release(c.buflk)
-	buf := c.buf
-
-	info, err := infoGo(c.conn, &goRequest{
-		infoGoRequest: infoGoRequest{
-			export:   name,
-			requests: requests,
-		},
-	}, buf)
+	err := c.infoGo(&goRequest{infoGoRequest{
+		export:   name,
+		requests: requests,
+	}}, yield)
 	if err != nil {
-		return info, err
+		return err
 	}
+
 	c.enterTransmission()
-	return info, nil
+	return nil
 }
 
-func infoGo[R interface {
-	*infoRequest | *goRequest
-	option
-}](server io.ReadWriter, opt R, buf []byte) (ExportInfo, error) {
-	err := requestOption(server, opt)
+func (c *Conn) infoGo(opt option, yield ExportInfoFunc) error {
+	err := requestOption(c.conn, opt)
 	if err != nil {
-		return ExportInfo{}, err
+		return err
 	}
+
+	acquire(c.buflk)
+	defer release(c.buflk)
+	buf := c.buf
 
 	var info ExportInfo
 
 	for {
-		reply, err := readOptionReply(server, buf)
+		reply, err := readOptionReply(c.conn, buf)
 		if err != nil {
-			return ExportInfo{}, err
+			return err
 		}
+
 		if reply.Type == nbdproto.REP_ACK {
 			break
 		}
+
 		var r repInfo
 		err = r.UnmarshalNBDReply(reply.Payload)
 		if err != nil {
-			return ExportInfo{}, err
+			return err
 		}
+
 		switch r.Type {
 		case nbdproto.INFO_EXPORT:
 			var i repInfoExport
 			err = i.UnmarshalNBDReply(r.Payload)
 			if err != nil {
-				return ExportInfo{}, err
+				return err
 			}
 			info.Size = i.Size
 			info.TransmissionFlags = i.Flags
+			info.ValidExport = true
 		case nbdproto.INFO_NAME:
 			var i repInfoName
 			err = i.UnmarshalNBDReply(r.Payload)
 			if err != nil {
-				return ExportInfo{}, err
+				return err
 			}
 			info.Name = i.Name
+			info.ValidName = true
 		case nbdproto.INFO_DESCRIPTION:
 			var i repInfoDescription
 			err = i.UnmarshalNBDReply(r.Payload)
 			if err != nil {
-				return ExportInfo{}, err
+				return err
 			}
 			info.Description = i.Description
+			info.ValidDescription = true
 		case nbdproto.INFO_BLOCK_SIZE:
 			var i repInfoBlockSize
 			err = i.UnmarshalNBDReply(r.Payload)
 			if err != nil {
-				return ExportInfo{}, err
+				return err
 			}
 			info.MinBlockSize = i.MinimumBlockSize
 			info.PreferredBlockSize = i.PreferredBlockSize
 			info.MaxBlockSize = i.MaximumBlockSize
+			info.ValidBlockSize = true
+		}
+
+		err = yield(info)
+		if err != nil {
+			c.setState(connectionStateCanceled)
+			if errors.Is(err, ErrDone) {
+				return nil
+			}
+			return err
 		}
 	}
 
-	return info, nil
+	return nil
 }
 
 func (c *Conn) StructuredReplies() error {
