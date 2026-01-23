@@ -188,16 +188,30 @@ func TestNBD(t *testing.T) {
 				t.Fatal(cmp.Diff(metacontexts, setcontexts))
 			}
 
-			info, err := conn.Info(export, InfoRequestAll())
+			var info ExportInfo
+
+			err = conn.Info(export, InfoRequestAll(), func(i ExportInfo) error {
+				info = i
+				return nil
+			})
 			if err != nil {
 				t.Fatalf("info: %v", err)
+			}
+
+			if !info.ValidExport {
+				t.Fatalf("expected info.ValidExport to be set")
 			}
 
 			if info.Size != tt.size {
 				t.Errorf("want size=%d, got size=%d", tt.size, info.Size)
 			}
 
-			info2, err := conn.Go(export, InfoRequestAll())
+			var info2 ExportInfo
+
+			err = conn.Go(export, InfoRequestAll(), func(i ExportInfo) error {
+				info2 = i
+				return nil
+			})
 			if err != nil {
 				t.Fatalf("go: %v", err)
 			}

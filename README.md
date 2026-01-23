@@ -79,8 +79,8 @@ methods on your nbd.Conn:
 func (c *Conn) Abort() error
 func (c *Conn) Close() error
 func (c *Conn) ExportName(name string) (size uint64, flags TransmissionFlags, err error)
-func (c *Conn) Go(name string, requests []InfoRequest) (ExportInfo, error)
-func (c *Conn) Info(name string, requests []InfoRequest) (ExportInfo, error)
+func (c *Conn) Go(name string, requests []InfoRequest, yield ExportInfoFunc) error
+func (c *Conn) Info(name string, requests []InfoRequest, yield ExportInfoFunc) error
 func (c *Conn) List(yield ListExportsFunc) error
 func (c *Conn) ListMetaContext(export string, queries []string, yield MetaContextFunc) error
 func (c *Conn) SetMetaContext(export string, queries []string, yield MetaContextFunc) error
@@ -93,7 +93,7 @@ the nbd.Conn into the transmission phase:
 
 ```go
 func (c *Conn) ExportName(name string) (size uint64, flags TransmissionFlags, err error)
-func (c *Conn) Go(name string, requests []InfoRequest) (ExportInfo, error)
+func (c *Conn) Go(name string, requests []InfoRequest, yield ExportInfoFunc) error
 ```
 
 <p align=center>:warning: Don't forget to <code>defer conn.Disconnect()</code> after entering the
