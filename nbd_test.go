@@ -137,7 +137,11 @@ func TestNBD(t *testing.T) {
 				}
 			}
 
-			exports, err := conn.List()
+			var exports []string
+			err = conn.List(func(export string) error {
+				exports = append(exports, export)
+				return nil
+			})
 			if err != nil {
 				t.Errorf("list: %v", err)
 			}

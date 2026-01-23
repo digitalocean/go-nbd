@@ -31,7 +31,12 @@ func run() error {
 		return fmt.Errorf("nbd connect: %w", err)
 	}
 	defer func() { _ = conn.Abort() }()
-	exports, err := conn.List()
+
+	var exports []string
+	err = conn.List(func(export string) error {
+		exports = append(exports, export)
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("nbd list: %w", err)
 	}
