@@ -36,14 +36,33 @@ func InfoRequestAll() []InfoRequest {
 }
 
 // ExportInfo describes the export.
+//
+// ValidName indicates the server sent a value for the Name field.
+//
+// ValidDescription indicates the server sent a value for the Description
+// field.
+//
+// ValidExport indicates the server sent a value for the Size and
+// TransmissionFlags fields. This is the only block of information
+// that the server is required to reply with.
+//
+// ValidBlockSize indicates the server sent a value for the MinBlockSize,
+// PreferredBlockSize, and MaxBlockSize fields.
 type ExportInfo struct {
-	Name               string
-	Description        string
-	Size               uint64
-	TransmissionFlags  uint16
+	Name      string
+	ValidName bool
+
+	Description      string
+	ValidDescription bool
+
+	Size              uint64
+	TransmissionFlags uint16
+	ValidExport       bool
+
 	MinBlockSize       uint32
 	PreferredBlockSize uint32
 	MaxBlockSize       uint32
+	ValidBlockSize     bool
 }
 
 // MetaContext is a human-readable description of a meta

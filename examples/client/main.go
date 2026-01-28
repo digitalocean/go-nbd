@@ -43,11 +43,18 @@ func run() error {
 	if len(exports) == 0 {
 		return fmt.Errorf("nbd: no exports")
 	}
+
 	name := exports[0]
-	info, err := conn.Info(name, nbd.InfoRequestAll())
+
+	var info nbd.ExportInfo
+	err = conn.Info(name, nbd.InfoRequestAll(), func(i nbd.ExportInfo) error {
+		info = i
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("nbd: info: %w", err)
 	}
+
 	fmt.Printf("info %+v\n", info)
 	var metas []nbd.MetaContext
 	err = conn.ListMetaContext(name, nil, func(m nbd.MetaContext) error {
