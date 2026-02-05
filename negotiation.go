@@ -68,6 +68,12 @@ type ExportInfo struct {
 // MetaContext is a human-readable description of a meta
 // context.
 type MetaContext struct {
+	// ID is only valid for responses to NBD_OPT_SET_META_CONTEXT. Its value
+	// should be considered transient and unique per connection.
+	//
+	// For responses to NBD_OPT_LIST_META_CONTEXT, it should be set to zero
+	// and callers must ignore it.
+	ID   uint32
 	Name string
 }
 

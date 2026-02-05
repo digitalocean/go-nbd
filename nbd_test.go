@@ -184,7 +184,17 @@ func TestNBD(t *testing.T) {
 				t.Fatalf("set base:allocation as meta context: %v", err)
 			}
 
-			if !cmp.Equal(metacontexts, setcontexts) {
+			listedContexts := make([]string, 0, len(metacontexts))
+			for _, m := range metacontexts {
+				listedContexts = append(listedContexts, m.Name)
+			}
+
+			setContexts := make([]string, 0, len(setcontexts))
+			for _, m := range setcontexts {
+				setContexts = append(setContexts, m.Name)
+			}
+
+			if !cmp.Equal(listedContexts, setContexts) {
 				t.Fatal(cmp.Diff(metacontexts, setcontexts))
 			}
 
