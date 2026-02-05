@@ -537,6 +537,8 @@ func (c *Conn) SetMetaContext(export string, queries []string, yield MetaContext
 		if err != nil {
 			return err
 		}
+
+		//nolint:staticcheck // S1016
 		err = yield(MetaContext{ID: r.ID, Name: r.Name})
 		if err != nil {
 			c.setState(connectionStateCanceled)
