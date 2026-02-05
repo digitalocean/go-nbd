@@ -492,7 +492,9 @@ func (c *Conn) ListMetaContext(export string, queries []string, yield MetaContex
 		if err != nil {
 			return err
 		}
-		err = yield(MetaContext{Name: r.Name})
+
+		// ID is set to zero here on purpose. See [MetaContext.ID].
+		err = yield(MetaContext{ID: 0, Name: r.Name})
 		if err != nil {
 			c.setState(connectionStateCanceled)
 			if errors.Is(err, ErrDone) {
@@ -535,7 +537,7 @@ func (c *Conn) SetMetaContext(export string, queries []string, yield MetaContext
 		if err != nil {
 			return err
 		}
-		err = yield(MetaContext{Name: r.Name})
+		err = yield(MetaContext{ID: r.ID, Name: r.Name})
 		if err != nil {
 			c.setState(connectionStateCanceled)
 			if errors.Is(err, ErrDone) {
