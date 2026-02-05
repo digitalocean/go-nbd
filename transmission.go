@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 
 	"github.com/digitalocean/go-nbd/internal/nbdproto"
 )
@@ -229,7 +230,7 @@ func requestTransmit(server io.Writer, cflags uint16, ty uint16, cookie uint64, 
 		return errors.New("payload size exceeds protocol limit")
 	}
 
-	header := nbdproto.RequestHeader{
+	hdr := nbdproto.RequestHeader{
 		Magic:  nbdproto.REQUEST_MAGIC,
 		Flags:  cflags,
 		Type:   ty,
@@ -238,19 +239,23 @@ func requestTransmit(server io.Writer, cflags uint16, ty uint16, cookie uint64, 
 		Length: length,
 	}
 	if l := len(payload); l > 0 {
-		header.Length = uint32(l)
+		hdr.Length = uint32(l)
 	}
 
-	if err := binary.Write(server, binary.BigEndian, header); err != nil {
-		return err
+	var header bytes.Buffer
+	err := binary.Write(&header, binary.BigEndian, hdr)
+	if err != nil {
+		return fmt.Errorf("serialize transmit header: %w", err)
 	}
 
-	if len(payload) == 0 {
-		return nil
+	packet := net.Buffers{
+		header.Bytes(),
+		payload,
 	}
 
-	if err := binary.Write(server, binary.BigEndian, payload); err != nil {
-		return err
+	_, err = io.Copy(server, &packet)
+	if err != nil {
+		return fmt.Errorf("send transmit packet: %w", err)
 	}
 
 	return nil

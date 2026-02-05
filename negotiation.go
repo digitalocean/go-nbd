@@ -7,7 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"unsafe"
+	"net"
 
 	"github.com/digitalocean/go-nbd/internal/nbdproto"
 )
@@ -354,20 +354,24 @@ func requestOption(server io.Writer, opt option) error {
 	if err := opt.Serialize(payload); err != nil {
 		return err
 	}
-	header := nbdproto.OptionHeader{
+
+	var header bytes.Buffer
+	err := binary.Write(&header, binary.BigEndian, nbdproto.OptionHeader{
 		Magic:  nbdproto.HAVE_OPT,
 		ID:     opt.ID(),
 		Length: uint32(payload.Len()),
+	})
+	if err != nil {
+		return fmt.Errorf("serialize option header: %w", err)
 	}
-	packet := bytes.NewBuffer(make([]byte, 0, uint32(unsafe.Sizeof(header))+header.Length))
-	if err := binary.Write(packet, binary.BigEndian, header); err != nil {
-		return err
+
+	packet := net.Buffers{
+		header.Bytes(),
+		payload.Bytes(),
 	}
-	if err := binary.Write(packet, binary.BigEndian, payload.Bytes()); err != nil {
-		return err
-	}
-	if _, err := io.Copy(server, packet); err != nil {
-		return err
+
+	if _, err := io.Copy(server, &packet); err != nil {
+		return fmt.Errorf("send option packet: %w", err)
 	}
 	return nil
 }
