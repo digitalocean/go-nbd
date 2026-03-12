@@ -316,3 +316,67 @@ func TestNBD(t *testing.T) {
 		})
 	}
 }
+
+// https://github.com/digitalocean/go-nbd/issues/52
+func TestSimpleRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+
+	pidfileDir := t.TempDir()
+	port := 10809
+
+	pidfile := filepath.Join(pidfileDir, "nbdkit.pid")
+	cleanup, err := provideNBD(t, pidfile, 1*1024*1024, port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	uri := MustURI(fmt.Sprintf("nbd://localhost:%d", port))
+
+	var dialer Dialer
+
+	conn, err := dialer.Dial(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	err = conn.Connect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Abort() }()
+
+	err = conn.Go("", InfoRequestAll(), func(_ ExportInfo) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Disconnect() }()
+
+	buf := make([]byte, 512)
+	for i := range buf {
+		buf[i] = 0xce
+	}
+
+	err = conn.Write(buf, 512, CommandFlags(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := make([]byte, 512)
+	n, err := conn.Read(got, 512, CommandFlags(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n != 512 {
+		t.Errorf("Expected 512 bytes read, got %d", n)
+	}
+
+	if !cmp.Equal(buf, got) {
+		t.Error(cmp.Diff(buf, got))
+	}
+}
