@@ -610,7 +610,7 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 		}
 
 		if hdr.simple != nil {
-			_, err := io.ReadFull(c.conn, buf)
+			n, err = io.ReadFull(c.conn, buf)
 			if err != nil {
 				return n, fmt.Errorf("read data from simple chunk: %w", err)
 			}
