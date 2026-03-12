@@ -37,7 +37,7 @@ jobs:
         go-version: ${{ matrix.toolchain }}
     - uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
       with:
-        version: v2.1
+        version: v2.9
   test:
     strategy:
       matrix:
@@ -55,3 +55,4 @@ jobs:
       run: sudo apt-get install nbdkit
     - name: Test
       run: go test -timeout 1m -v ./...
+
