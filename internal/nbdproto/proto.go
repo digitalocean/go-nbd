@@ -7,6 +7,7 @@ const (
 	HAVE_OPT                   uint64 = 0x49484156454F5054
 	CLI_SERV                   uint64 = 0x00420281861253
 	REQUEST_MAGIC              uint32 = 0x25609513
+	REPLY_MAGIC                uint64 = 0x3e889045565a9
 	NBD_SIMPLE_REPLY_MAGIC     uint32 = 0x67446698
 	NBD_STRUCTURED_REPLY_MAGIC uint32 = 0x668e33ef
 
