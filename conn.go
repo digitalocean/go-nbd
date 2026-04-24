@@ -619,7 +619,7 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 
 		switch hdr.structured.Type {
 		case nbdproto.REPLY_TYPE_NONE:
-			if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
+			if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE == 0 {
 				return n, errors.New("server sent NBD_REP_TYPE_NONE without REPLY_FLAG_DONE")
 			}
 			return n, nil
@@ -832,7 +832,7 @@ func (c *Conn) BlockStatus(offset uint64, length uint32, yield BlockStatusFunc, 
 
 		switch hdr.structured.Type {
 		case nbdproto.REPLY_TYPE_NONE:
-			if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
+			if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE == 0 {
 				return errors.New("server sent NBD_REP_TYPE_NONE without REPLY_FLAG_DONE")
 			}
 			return nil
