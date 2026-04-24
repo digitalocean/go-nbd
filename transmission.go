@@ -218,7 +218,7 @@ func oneShotTransmit(
 			hdr.structured.Type, nbdproto.REPLY_TYPE_NONE)
 	}
 
-	if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE != 0 {
+	if hdr.structured.Flags&nbdproto.REPLY_FLAG_DONE == 0 {
 		return errors.New("server sent NBD_REP_TYPE_NONE without REPLY_FLAG_DONE")
 	}
 
