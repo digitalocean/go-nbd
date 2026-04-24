@@ -646,6 +646,11 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 			}
 			coveredRegions = append(coveredRegions, got)
 
+			start := hole.Offset - offset
+			end := start + uint64(hole.Length)
+
+			clear(buf[start:end])
+
 			n += int(hole.Length)
 		case nbdproto.REPLY_TYPE_OFFSET_DATA:
 			var absoluteOffset uint64
