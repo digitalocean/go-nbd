@@ -382,6 +382,11 @@ func readOptionReply(server io.Reader, buf []byte) (optionReply, error) {
 		return optionReply{}, err
 	}
 
+	if header.Magic != nbdproto.REPLY_MAGIC {
+		return optionReply{}, fmt.Errorf("got %#x magic, want %#x",
+			header.Magic, nbdproto.REPLY_MAGIC)
+	}
+
 	if int(header.Length) > len(buf) {
 		return optionReply{}, errPayloadTooLarge
 	}
