@@ -130,9 +130,8 @@ type Conn struct {
 	discardZeroes bool
 	structured    bool
 
-	state_         atomic.Int32
-	inTransmission atomic.Bool
-	cookie         atomic.Uint64
+	state_ atomic.Int32
+	cookie atomic.Uint64
 
 	buflk chan struct{}
 	buf   []byte
@@ -223,7 +222,7 @@ func (c *Conn) ExportName(name string) (size uint64, flags TransmissionFlags, er
 }
 
 func (c *Conn) Abort() error {
-	if c.inTransmission.Load() {
+	if state := c.state(); state != connectionStateOptions {
 		return nil
 	}
 	err := requestOption(c.conn, &abortRequest{})
@@ -920,10 +919,13 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 }
 
 func (c *Conn) Disconnect() error {
-	if state := c.state(); state == connectionStateError {
+	state := c.state()
+
+	if state == connectionStateError {
 		return nil
 	}
-	if !c.inTransmission.Load() {
+
+	if state != connectionStateTransmission {
 		return errNotTransmission
 	}
 
@@ -946,7 +948,6 @@ func (c *Conn) setState(s connectionState) {
 }
 
 func (c *Conn) enterTransmission() {
-	c.inTransmission.Store(true)
 	c.setState(connectionStateTransmission)
 }
 
