@@ -104,6 +104,8 @@ type BlockStatusDescriptor struct {
 type transmissionHeader struct {
 	simple     *nbdproto.SimpleReplyHeader
 	structured *nbdproto.StructuredReplyHeader
+
+	structuredReplies bool
 }
 
 func (t *transmissionHeader) DecodeFrom(r io.Reader) error {
@@ -114,6 +116,11 @@ func (t *transmissionHeader) DecodeFrom(r io.Reader) error {
 	if magic != nbdproto.NBD_SIMPLE_REPLY_MAGIC && magic != nbdproto.NBD_STRUCTURED_REPLY_MAGIC {
 		return fmt.Errorf("got invalid magic %x", magic)
 	}
+
+	if !t.structuredReplies && magic == nbdproto.NBD_STRUCTURED_REPLY_MAGIC {
+		return fmt.Errorf("got unnegotiated NBD_STRUCTURED_REPLY_MAGIC")
+	}
+
 	if magic == nbdproto.NBD_SIMPLE_REPLY_MAGIC {
 		hdr := nbdproto.SimpleReplyHeader{
 			Magic: magic,
@@ -161,8 +168,7 @@ func (t *transmissionHeader) IsErr() bool {
 	return false
 }
 
-func oneShotTransmit(
-	server io.ReadWriter,
+func (c *Conn) oneShotTransmit(
 	cflags uint16,
 	type_ uint16,
 	cookie uint64,
@@ -171,13 +177,15 @@ func oneShotTransmit(
 	payload []byte,
 	buf []byte,
 ) error {
-	err := requestTransmit(server, cflags, type_, cookie, offset, length, payload)
+	err := requestTransmit(c.conn, cflags, type_, cookie, offset, length, payload)
 	if err != nil {
 		return err
 	}
 
-	var hdr transmissionHeader
-	err = hdr.DecodeFrom(server)
+	hdr := transmissionHeader{
+		structuredReplies: c.structured,
+	}
+	err = hdr.DecodeFrom(c.conn)
 	if err != nil {
 		return err
 	}
@@ -201,7 +209,7 @@ func oneShotTransmit(
 		d := transmissionErrorDecoder{
 			hdr: hdr,
 			buf: buf,
-			r:   server,
+			r:   c.conn,
 		}
 		if err := d.Decode(&terr); err != nil {
 			return err
