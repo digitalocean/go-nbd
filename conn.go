@@ -71,23 +71,52 @@ func ParseURI(s string) (*URI, error) {
 	return &URI{URL: u}, nil
 }
 
+type DialOption interface {
+	apply(*dialOptions)
+}
+
+type dialOptionFunc func(opts *dialOptions)
+
+func (f dialOptionFunc) apply(opts *dialOptions) {
+	f(opts)
+}
+
+// WithBuffer supplies the connection with the given buffer to use as
+// scratch space. Callers must not retain buf. If callers don't supply
+// a buffer, one will be allocated at [DefaultBufferSize].
+func WithBuffer(buf []byte) DialOption {
+	return dialOptionFunc(func(opts *dialOptions) {
+		opts.buffer = buf
+	})
+}
+
+type dialOptions struct {
+	buffer []byte
+}
+
 type Dialer struct {
 	// Pass in a net.Dialer to configure settings. Pass in nil
 	// or zero-value to use defaults.
 	NetDialer *net.Dialer
-
-	// Optional buffer for the connection to use. If one is not
-	// provided, one will be allocated at [DefaultBufferSize].
-	Buffer []byte
 }
 
-func (d *Dialer) Dial(ctx context.Context, uri *URI) (conn *Conn, err error) {
-	if d.NetDialer == nil {
-		d.NetDialer = new(net.Dialer)
+func (d *Dialer) Dial(ctx context.Context, uri *URI, opts ...DialOption) (conn *Conn, err error) {
+	var options dialOptions
+
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt.apply(&options)
 	}
 
-	if len(d.Buffer) == 0 {
-		d.Buffer = make([]byte, DefaultBufferSize)
+	dialer := d.NetDialer
+	if dialer == nil {
+		dialer = new(net.Dialer)
+	}
+
+	if len(options.buffer) == 0 {
+		options.buffer = make([]byte, DefaultBufferSize)
 	}
 
 	buflk := make(chan struct{}, 1)
@@ -98,7 +127,7 @@ func (d *Dialer) Dial(ctx context.Context, uri *URI) (conn *Conn, err error) {
 		discardZeroes: true,
 
 		buflk: buflk,
-		buf:   d.Buffer,
+		buf:   options.buffer,
 	}
 
 	conn.setState(connectionStateNew)
@@ -112,7 +141,7 @@ func (d *Dialer) Dial(ctx context.Context, uri *URI) (conn *Conn, err error) {
 		address = net.JoinHostPort(address, strconv.Itoa(DefaultPort))
 	}
 
-	transport, err := d.NetDialer.DialContext(ctx, network, address)
+	transport, err := dialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, fmt.Errorf("dial nbd: %w", err)
 	}
