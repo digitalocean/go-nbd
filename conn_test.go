@@ -41,9 +41,10 @@ func newTestConn(response []byte) *Conn {
 	buflk <- struct{}{}
 
 	conn := &Conn{
-		conn:  &mockConn{r: bytes.NewReader(response), w: io.Discard},
-		buflk: buflk,
-		buf:   make([]byte, DefaultBufferSize),
+		conn:       &mockConn{r: bytes.NewReader(response), w: io.Discard},
+		buflk:      buflk,
+		buf:        make([]byte, DefaultBufferSize),
+		structured: true,
 	}
 	conn.state_.Store(int32(connectionStateTransmission))
 	// cookie starts at 0; Read will Add(1) to get 1 as the first cookie

@@ -575,7 +575,9 @@ func (c *Conn) Read(buf []byte, offset uint64, flags CommandFlags) (n int, err e
 	var coveredRegions []span.Span[uint64]
 
 	for {
-		var hdr transmissionHeader
+		hdr := transmissionHeader{
+			structuredReplies: c.structured,
+		}
 		err = hdr.DecodeFrom(c.conn)
 		if err != nil {
 			return n, err
@@ -700,7 +702,7 @@ func (c *Conn) Write(data []byte, offset uint64, flags CommandFlags) error {
 
 	length := uint32(len(data))
 
-	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_WRITE, cookie, offset, length, data, buf)
+	return c.oneShotTransmit(uint16(flags), nbdproto.CMD_WRITE, cookie, offset, length, data, buf)
 }
 
 func (c *Conn) Flush(flags CommandFlags) error {
@@ -714,7 +716,7 @@ func (c *Conn) Flush(flags CommandFlags) error {
 
 	cookie := c.cookie.Add(1)
 
-	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_FLUSH, cookie, 0, 0, nil, buf)
+	return c.oneShotTransmit(uint16(flags), nbdproto.CMD_FLUSH, cookie, 0, 0, nil, buf)
 }
 
 func (c *Conn) Trim(offset uint64, length uint32, flags CommandFlags) error {
@@ -728,7 +730,7 @@ func (c *Conn) Trim(offset uint64, length uint32, flags CommandFlags) error {
 
 	cookie := c.cookie.Add(1)
 
-	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_TRIM, cookie, offset, length, nil, buf)
+	return c.oneShotTransmit(uint16(flags), nbdproto.CMD_TRIM, cookie, offset, length, nil, buf)
 }
 
 func (c *Conn) Cache(offset uint64, length uint32, flags CommandFlags) error {
@@ -742,7 +744,7 @@ func (c *Conn) Cache(offset uint64, length uint32, flags CommandFlags) error {
 
 	cookie := c.cookie.Add(1)
 
-	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_CACHE, cookie, offset, length, nil, buf)
+	return c.oneShotTransmit(uint16(flags), nbdproto.CMD_CACHE, cookie, offset, length, nil, buf)
 }
 
 func (c *Conn) WriteZeroes(offset uint64, length uint32, flags CommandFlags) error {
@@ -756,7 +758,7 @@ func (c *Conn) WriteZeroes(offset uint64, length uint32, flags CommandFlags) err
 
 	cookie := c.cookie.Add(1)
 
-	return oneShotTransmit(c.conn, uint16(flags), nbdproto.CMD_WRITE_ZEROES, cookie, offset, length, nil, buf)
+	return c.oneShotTransmit(uint16(flags), nbdproto.CMD_WRITE_ZEROES, cookie, offset, length, nil, buf)
 }
 
 // BlockStatusFunc is a push-based iterator for consuming the stream of
@@ -798,7 +800,9 @@ func (c *Conn) BlockStatus(offset uint64, length uint32, yield BlockStatusFunc, 
 	}
 
 	for {
-		var hdr transmissionHeader
+		hdr := transmissionHeader{
+			structuredReplies: c.structured,
+		}
 		err = hdr.DecodeFrom(c.conn)
 		if err != nil {
 			return err
